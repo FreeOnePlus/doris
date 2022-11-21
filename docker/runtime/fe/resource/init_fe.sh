@@ -24,11 +24,15 @@ ARGS=$(getopt -o -h: --long fe_id:,fe_servers: -n "$0" -- "$@")
 eval set -- "${ARGS}"
 
 <<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
+<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
 while [[ -n "$1" ]]; do
 =======
 while [[ -n "$1" ]]
 do
 >>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
+=======
+while [[ -n "$1" ]]; do
+>>>>>>> 421059b70 (change docs):docker/runtime/fe/resource/run_fe.sh
     case "$1" in
     --fe_id)
         FE_ID=$2
@@ -88,15 +92,18 @@ echo "DEBUG >>>>>> feEditLogPortArray = ${feEditLogPortArray[*]}"
 echo "DEBUG >>>>>> masterFe = ${feIpArray[1]}:${feEditLogPortArray[1]}"
 echo "DEBUG >>>>>> currentFe = ${feIpArray[FE_ID]}:${feEditLogPortArray[FE_ID]}"
 
+<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
 priority_networks=$(echo "${feIpArray[FE_ID]}" | awk -F '.' '{print$1"."$2"."$3".0/24"}')
 echo "DEBUG >>>>>> Append the configuration [priority_networks = ${priority_networks}] to /opt/doris-fe/conf/fe.conf"
 echo "priority_networks = ${priority_networks}" >>/opt/apache-doris/fe/conf/fe.conf
 
 <<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
 =======
+=======
+>>>>>>> 421059b70 (change docs):docker/runtime/fe/resource/run_fe.sh
 priority_networks=$(echo "${feIpArray[FE_ID]}" | awk -F '.' '{print$1"."$2"."$3".0/24"}')
 echo "DEBUG >>>>>> Append the configuration [priority_networks = ${priority_networks}] to /opt/doris-fe/conf/fe.conf"
-echo "priority_networks = ${priority_networks}" >> /opt/apache-doris/fe/conf/fe.conf
+echo "priority_networks = ${priority_networks}" >>/opt/apache-doris/fe/conf/fe.conf
 
 >>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
 if [[ "${FE_ID}" != 1 ]]; then
@@ -121,10 +128,14 @@ if [[ "${FE_ID}" != 1 ]]; then
     echo "DEBUG >>>>>> registerMySQL = 【${registerMySQL}】"
     echo "DEBUG >>>>>> registerShell = 【${registerShell}】"
 <<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
+<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
     echo "DEBUG >>>>>> feMasterStat =  【mysql -uroot -P9030 -h ${feIpArray[1]} -e \"show frontends\" | grep \"${feIpArray[1]}_9010\" | grep -E \"true[[:space:]]*true\"】"
 =======
     echo "DEBUG >>>>>> feMasterStat =  【mysql -uroot -P9030 -h${feIpArray[1]} -e \"show frontends\" | grep \"${feIpArray[1]}_9010\" | grep -E \"true[[:space:]]*true\"】"
 >>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
+=======
+    echo "DEBUG >>>>>> feMasterStat =  【mysql -uroot -P9030 -h"${feIpArray[1]}" -e \"show frontends\" | grep \"${feIpArray[1]}_9010\" | grep -E \"true[[:space:]]*true\"】"
+>>>>>>> 421059b70 (change docs):docker/runtime/fe/resource/run_fe.sh
 
     ## STEP1: check FE master status
 
