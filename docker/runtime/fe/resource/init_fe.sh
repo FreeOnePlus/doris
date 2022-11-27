@@ -23,16 +23,7 @@ ARGS=$(getopt -o -h: --long fe_id:,fe_servers: -n "$0" -- "$@")
 
 eval set -- "${ARGS}"
 
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
 while [[ -n "$1" ]]; do
-=======
-while [[ -n "$1" ]]
-do
->>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
-=======
-while [[ -n "$1" ]]; do
->>>>>>> 421059b70 (change docs):docker/runtime/fe/resource/run_fe.sh
     case "$1" in
     --fe_id)
         FE_ID=$2
@@ -59,25 +50,15 @@ feIpArray=()
 feEditLogPortArray=()
 
 IFS=","
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
-# shellcheck disable=SC2206
-=======
->>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
 feServerArray=(${FE_SERVERS})
 
 for i in "${!feServerArray[@]}"; do
 
     val=${feServerArray[i]}
     val=${val// /}
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
-    tmpFeId=$(echo "${val}" | awk -F ':' '{ sub(/fe/, ""); sub(/ /, ""); print$1}')
-    tmpFeIp=$(echo "${val}" | awk -F ':' '{ sub(/ /, ""); print$2}')
-    tmpFeEditLogPort=$(echo "${val}" | awk -F ':' '{ sub(/ /, ""); print$3}')
-=======
-    tmpFeId=$(echo "$val" | awk -F ':' '{ sub(/fe/, ""); sub(/ /, ""); print$1}')
-    tmpFeIp=$(echo "$val" | awk -F ':' '{ sub(/ /, ""); print$2}')
-    tmpFeEditLogPort=$(echo "$val" | awk -F ':' '{ sub(/ /, ""); print$3}')
->>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
+    tmpFeId=$(echo ${val} | awk -F ':' '{ sub(/fe/, ""); sub(/ /, ""); print$1}')
+    tmpFeIp=$(echo ${val} | awk -F ':' '{ sub(/ /, ""); print$2}')
+    tmpFeEditLogPort=$(echo ${val} | awk -F ':' '{ sub(/ /, ""); print$3}')
     echo "DEBUG >>>>>> tmpFeId = [${tmpFeId}]"
     echo "DEBUG >>>>>> tmpFeIp = [${tmpFeIp}]"
     echo "DEBUG >>>>>> tmpFeEditLogPort = [${tmpFeEditLogPort}]"
@@ -92,20 +73,10 @@ echo "DEBUG >>>>>> feEditLogPortArray = ${feEditLogPortArray[*]}"
 echo "DEBUG >>>>>> masterFe = ${feIpArray[1]}:${feEditLogPortArray[1]}"
 echo "DEBUG >>>>>> currentFe = ${feIpArray[FE_ID]}:${feEditLogPortArray[FE_ID]}"
 
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
 priority_networks=$(echo "${feIpArray[FE_ID]}" | awk -F '.' '{print$1"."$2"."$3".0/24"}')
 echo "DEBUG >>>>>> Append the configuration [priority_networks = ${priority_networks}] to /opt/doris-fe/conf/fe.conf"
 echo "priority_networks = ${priority_networks}" >>/opt/apache-doris/fe/conf/fe.conf
 
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
-=======
-=======
->>>>>>> 421059b70 (change docs):docker/runtime/fe/resource/run_fe.sh
-priority_networks=$(echo "${feIpArray[FE_ID]}" | awk -F '.' '{print$1"."$2"."$3".0/24"}')
-echo "DEBUG >>>>>> Append the configuration [priority_networks = ${priority_networks}] to /opt/doris-fe/conf/fe.conf"
-echo "priority_networks = ${priority_networks}" >>/opt/apache-doris/fe/conf/fe.conf
-
->>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
 if [[ "${FE_ID}" != 1 ]]; then
 
     ## if current node is not master
@@ -115,11 +86,7 @@ if [[ "${FE_ID}" != 1 ]]; then
     ## STEP2: if feMasterStat == true; register PREPARE1 & PREPARE2 [retry 3 times, sleep 10s]
 
     ## PREPARE1: registe follower from mysql client
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
-    registerMySQL="mysql -uroot -P9030 -h${feIpArray[1]} -e \"alter system add follower '${feIpArray[FE_ID]}:${feEditLogPortArray[FE_ID]}'\""
-=======
-    registerMySQL=$(echo "mysql -uroot -P9030 -h${feIpArray[1]} -e" "\"alter system add follower '${feIpArray[FE_ID]}:${feEditLogPortArray[FE_ID]}'\"")
->>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
+    registerMySQL=echo "mysql -uroot -P9030 -h${feIpArray[1]} -e" "\"alter system add follower '${feIpArray[FE_ID]}:${feEditLogPortArray[FE_ID]}'\""
 
     ## PREPARE2: call start_fe.sh using --help optional
     registerShell="/opt/apache-doris/fe/bin/start_fe.sh --helper '${feIpArray[1]}:${feEditLogPortArray[1]}'"
@@ -127,15 +94,7 @@ if [[ "${FE_ID}" != 1 ]]; then
     echo "DEBUG >>>>>> FE is follower, fe_id = ${FE_ID}"
     echo "DEBUG >>>>>> registerMySQL = 【${registerMySQL}】"
     echo "DEBUG >>>>>> registerShell = 【${registerShell}】"
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
-    echo "DEBUG >>>>>> feMasterStat =  【mysql -uroot -P9030 -h ${feIpArray[1]} -e \"show frontends\" | grep \"${feIpArray[1]}_9010\" | grep -E \"true[[:space:]]*true\"】"
-=======
-    echo "DEBUG >>>>>> feMasterStat =  【mysql -uroot -P9030 -h${feIpArray[1]} -e \"show frontends\" | grep \"${feIpArray[1]}_9010\" | grep -E \"true[[:space:]]*true\"】"
->>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
-=======
     echo "DEBUG >>>>>> feMasterStat =  【mysql -uroot -P9030 -h"${feIpArray[1]}" -e \"show frontends\" | grep \"${feIpArray[1]}_9010\" | grep -E \"true[[:space:]]*true\"】"
->>>>>>> 421059b70 (change docs):docker/runtime/fe/resource/run_fe.sh
 
     ## STEP1: check FE master status
 
@@ -143,16 +102,16 @@ if [[ "${FE_ID}" != 1 ]]; then
 
         ## run STEP1 & STEP2, and then break
         echo "Run registerShell command, [ registerMySQL = ${registerMySQL} ]"
-        eval "${registerMySQL}"
+        eval ${registerMySQL}
         sleep 2
 
         ## followerJoined: Joined = 0, doesn't join = 1
-        mysql -uroot -P9030 -h"${feIpArray[1]}" -e "show frontends" | grep "${feIpArray[FE_ID]}_9010" | grep -E "false[[:space:]]*false"
+        mysql -uroot -P9030 -h${feIpArray[1]} -e "show frontends" | grep "${feIpArray[FE_ID]}_9010" | grep -E "false[[:space:]]*false"
         followerJoined=$?
 
-        if [[ "${followerJoined}" == 0 ]]; then
+        if [[ "$followerJoined" == 0 ]]; then
             echo "Run registerShell command, [ registerShell = ${registerShell} ]"
-            eval "${registerShell}"
+            eval ${registerShell}
             echo "The resutl of run registerShell command, [ res = $? ]"
         fi
         sleep 5
@@ -162,11 +121,7 @@ if [[ "${FE_ID}" != 1 ]]; then
 else
 
     registerShell="/opt/apache-doris/fe/bin/start_fe.sh"
-<<<<<<< HEAD:docker/runtime/fe/resource/init_fe.sh
-    eval "${registerShell}"
-=======
     eval ${registerShell}
->>>>>>> 0a6aae7c5 (change docs):docker/runtime/fe/resource/run_fe.sh
     echo "DEBUG >>>>>> FE is master, fe_id = ${FE_ID}"
     echo "DEBUG >>>>>> registerShell = ${registerShell}"
 
