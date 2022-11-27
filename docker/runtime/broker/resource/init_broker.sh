@@ -98,7 +98,7 @@ for ((i = 0; i <= 20; i++)); do
     if [[ "${broker_join_status}" == 0 ]]; then
         ## broker registe successfully
         echo "BROKER START SUCCESS!!!"
-        break
+        read -n 1
     else
         ## broker doesn't registe
         echo "DEBUG >>>>>> run commnad ${registerMySQL}"
