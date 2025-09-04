@@ -48,6 +48,7 @@ import org.apache.doris.nereids.trees.expressions.functions.agg.HllUnion;
 import org.apache.doris.nereids.trees.expressions.functions.agg.HllUnionAgg;
 import org.apache.doris.nereids.trees.expressions.functions.agg.IntersectCount;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Kurt;
+import org.apache.doris.nereids.trees.expressions.functions.agg.LLMAgg;
 import org.apache.doris.nereids.trees.expressions.functions.agg.LinearHistogram;
 import org.apache.doris.nereids.trees.expressions.functions.agg.MapAgg;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Max;
@@ -68,6 +69,7 @@ import org.apache.doris.nereids.trees.expressions.functions.agg.Percentile;
 import org.apache.doris.nereids.trees.expressions.functions.agg.PercentileApprox;
 import org.apache.doris.nereids.trees.expressions.functions.agg.PercentileApproxWeighted;
 import org.apache.doris.nereids.trees.expressions.functions.agg.PercentileArray;
+import org.apache.doris.nereids.trees.expressions.functions.agg.PercentileReservoir;
 import org.apache.doris.nereids.trees.expressions.functions.agg.QuantileUnion;
 import org.apache.doris.nereids.trees.expressions.functions.agg.RegrIntercept;
 import org.apache.doris.nereids.trees.expressions.functions.agg.RegrSlope;
@@ -231,6 +233,10 @@ public interface AggregateFunctionVisitor<R, C> {
         return visitAggregateFunction(linearHistogram, context);
     }
 
+    default R visitLLMAgg(LLMAgg llmAgg, C context) {
+        return visitNullableAggregateFunction(llmAgg, context);
+    }
+
     default R visitMapAgg(MapAgg mapAgg, C context) {
         return visitAggregateFunction(mapAgg, context);
     }
@@ -273,6 +279,10 @@ public interface AggregateFunctionVisitor<R, C> {
 
     default R visitPercentile(Percentile percentile, C context) {
         return visitNullableAggregateFunction(percentile, context);
+    }
+
+    default R visitPercentileReservoir(PercentileReservoir percentileReservoir, C context) {
+        return visitNullableAggregateFunction(percentileReservoir, context);
     }
 
     default R visitPercentileApprox(PercentileApprox percentileApprox, C context) {

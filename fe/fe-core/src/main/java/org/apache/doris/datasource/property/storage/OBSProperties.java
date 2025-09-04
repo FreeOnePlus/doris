@@ -20,16 +20,21 @@ package org.apache.doris.datasource.property.storage;
 import org.apache.doris.datasource.property.ConnectorProperty;
 
 import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableSet;
 import lombok.Getter;
 import lombok.Setter;
+import org.apache.commons.lang3.StringUtils;
+import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 
 import java.util.Map;
 import java.util.Objects;
-import java.util.regex.Matcher;
+import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-public class OBSProperties extends AbstractObjectStorageProperties {
+public class OBSProperties extends AbstractS3CompatibleProperties {
 
     @Setter
     @Getter
@@ -39,22 +44,85 @@ public class OBSProperties extends AbstractObjectStorageProperties {
     protected String endpoint = "";
 
     @Getter
-    @ConnectorProperty(names = {"obs.access_key", "AWS_ACCESS_KEY", "ACCESS_KEY", "access_key"},
+    @ConnectorProperty(names = {"obs.access_key", "s3.access_key", "AWS_ACCESS_KEY", "access_key", "ACCESS_KEY"},
+            required = false,
             description = "The access key of OBS.")
     protected String accessKey = "";
 
     @Getter
-    @ConnectorProperty(names = {"obs.secret_key", "secret_key", "s3.secret_key"},
+    @ConnectorProperty(names = {"obs.secret_key", "s3.secret_key", "AWS_SECRET_KEY", "secret_key", "SECRET_KEY"},
+            required = false,
             description = "The secret key of OBS.")
     protected String secretKey = "";
 
     @Getter
+    @Setter
     @ConnectorProperty(names = {"obs.region", "s3.region", "AWS_REGION", "region", "REGION"}, required = false,
             description = "The region of OBS.")
     protected String region;
 
-    private static Pattern ENDPOINT_PATTERN = Pattern
-            .compile("^obs\\.[a-z0-9-]+\\.myhuaweicloud\\.com(\\.internal)?$");
+    @Getter
+    @ConnectorProperty(names = {"obs.session_token", "s3.session_token", "session_token"},
+            required = false,
+            description = "The session token of OBS.")
+    protected String sessionToken = "";
+
+    /**
+     * The maximum number of concurrent connections that can be made to the object storage system.
+     * This value is optional and can be configured by the user.
+     */
+    @Getter
+    @ConnectorProperty(names = {"obs.connection.maximum", "s3.connection.maximum"}, required = false,
+            description = "Maximum number of connections.")
+    protected String maxConnections = "100";
+
+    /**
+     * The timeout (in milliseconds) for requests made to the object storage system.
+     * This value is optional and can be configured by the user.
+     */
+    @Getter
+    @ConnectorProperty(names = {"obs.connection.request.timeout", "s3.connection.request.timeout"}, required = false,
+            description = "Request timeout in seconds.")
+    protected String requestTimeoutS = "10000";
+
+    /**
+     * The timeout (in milliseconds) for establishing a connection to the object storage system.
+     * This value is optional and can be configured by the user.
+     */
+    @Getter
+    @ConnectorProperty(names = {"obs.connection.timeout", "s3.connection.timeout"}, required = false,
+            description = "Connection timeout in seconds.")
+    protected String connectionTimeoutS = "10000";
+
+    /**
+     * Flag indicating whether to use path-style URLs for the object storage system.
+     * This value is optional and can be configured by the user.
+     */
+    @Setter
+    @Getter
+    @ConnectorProperty(names = {"obs.use_path_style", "use_path_style", "s3.path-style-access"}, required = false,
+            description = "Whether to use path style URL for the storage.")
+    protected String usePathStyle = "false";
+
+    @ConnectorProperty(names = {"obs.force_parsing_by_standard_uri", "force_parsing_by_standard_uri"}, required = false,
+            description = "Whether to use path style URL for the storage.")
+    @Setter
+    @Getter
+    protected String forceParsingByStandardUrl = "false";
+
+    /**
+     * Pattern to extract the region from a Huawei Cloud OBS endpoint.
+     * <p>
+     * Supported formats:
+     * - obs-cn-hangzhou.myhuaweicloud.com          => region = cn-hangzhou
+     * - https://obs-cn-shanghai.myhuaweicloud.com  => region = cn-shanghai
+     * <p>
+     * Group(1) captures the region name (e.g., cn-hangzhou).
+     * FYI: https://console-intl.huaweicloud.com/apiexplorer/#/endpoint/OBS
+     */
+    private static final Set<Pattern> ENDPOINT_PATTERN = ImmutableSet.of(Pattern
+            .compile("^(?:https?://)?obs\\.([a-z0-9-]+)\\.myhuaweicloud\\.com$"));
+
 
     public OBSProperties(Map<String, String> origProps) {
         super(Type.OBS, origProps);
@@ -62,7 +130,7 @@ public class OBSProperties extends AbstractObjectStorageProperties {
     }
 
     protected static boolean guessIsMe(Map<String, String> origProps) {
-        String value = Stream.of("obs.endpoint", "s3.endpoint", "AWS_ENDPOINT", "endpoint", "ENDPOINT", "uri")
+        String value = Stream.of("obs.endpoint", "s3.endpoint", "AWS_ENDPOINT", "endpoint", "ENDPOINT")
                 .map(origProps::get)
                 .filter(Objects::nonNull)
                 .findFirst()
@@ -71,36 +139,44 @@ public class OBSProperties extends AbstractObjectStorageProperties {
         if (!Strings.isNullOrEmpty(value)) {
             return value.contains("myhuaweicloud.com");
         }
-        if (!origProps.containsKey("uri")) {
-            return false;
-        }
-        // Check if the uri property contains "myhuaweicloud.com"
-        return origProps.get("uri").contains("myhuaweicloud.com");
+        Optional<String> uriValue = origProps.entrySet().stream()
+                .filter(e -> e.getKey().equalsIgnoreCase("uri"))
+                .map(Map.Entry::getValue)
+                .findFirst();
+        return uriValue.isPresent() && uriValue.get().contains("myhuaweicloud.com");
     }
 
     @Override
-    protected Pattern endpointPattern() {
+    protected Set<Pattern> endpointPatterns() {
         return ENDPOINT_PATTERN;
     }
 
-    /**
-     * Initializes the region field based on the OBS endpoint if it's not already set.
-     * <p>
-     * This method extracts the region from Huawei Cloud OBS endpoints.
-     * It supports typical OBS endpoint formats like:
-     * <p>
-     * Example:
-     * - "obs.cn-north-4.myhuaweicloud.com" → region = "cn-north-4"
-     */
     @Override
-    protected void initRegionIfNecessary() {
-        if (Strings.isNullOrEmpty(this.region)) {
-            Pattern obsPattern = Pattern.compile("obs\\.([a-z0-9-]+)\\.myhuaweicloud\\.com");
-            Matcher matcher = obsPattern.matcher(endpoint);
-            if (matcher.find()) {
-                this.region = matcher.group(1);
-            }
+    public AwsCredentialsProvider getAwsCredentialsProvider() {
+        AwsCredentialsProvider credentialsProvider = super.getAwsCredentialsProvider();
+        if (credentialsProvider != null) {
+            return credentialsProvider;
         }
+        if (StringUtils.isBlank(accessKey) && StringUtils.isBlank(secretKey)) {
+            // For anonymous access (no credentials required)
+            return AnonymousCredentialsProvider.create();
+        }
+        return null;
     }
 
+    @Override
+    public void initializeHadoopStorageConfig() {
+        super.initializeHadoopStorageConfig();
+        hadoopStorageConfig.set("fs.obs.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem");
+        hadoopStorageConfig.set("fs.obs.access.key", accessKey);
+        hadoopStorageConfig.set("fs.obs.secret.key", secretKey);
+        hadoopStorageConfig.set("fs.obs.endpoint", endpoint);
+    }
+
+    protected void setEndpointIfPossible() {
+        super.setEndpointIfPossible();
+        if (StringUtils.isBlank(getEndpoint())) {
+            throw new IllegalArgumentException("Property obs.endpoint is required.");
+        }
+    }
 }

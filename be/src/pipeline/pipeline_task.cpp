@@ -39,7 +39,6 @@
 #include "runtime/query_context.h"
 #include "runtime/thread_context.h"
 #include "runtime/workload_group/workload_group_manager.h"
-#include "util/container_util.hpp"
 #include "util/defer_op.h"
 #include "util/mem_info.h"
 #include "util/runtime_profile.h"
@@ -52,6 +51,7 @@ class RuntimeState;
 } // namespace doris
 
 namespace doris::pipeline {
+#include "common/compile_check_begin.h"
 
 PipelineTask::PipelineTask(PipelinePtr& pipeline, uint32_t task_id, RuntimeState* state,
                            std::shared_ptr<PipelineFragmentContext> fragment_context,
@@ -78,9 +78,9 @@ PipelineTask::PipelineTask(PipelinePtr& pipeline, uint32_t task_id, RuntimeState
           _sink(pipeline->sink_shared_pointer()),
           _shared_state_map(std::move(shared_state_map)),
           _task_idx(task_idx),
-          _execution_dep(state->get_query_ctx()->get_execution_dependency()),
           _memory_sufficient_dependency(state->get_query_ctx()->get_memory_sufficient_dependency()),
           _pipeline_name(_pipeline->name()) {
+    _execution_dependencies.push_back(state->get_query_ctx()->get_execution_dependency());
     if (!_shared_state_map.contains(_sink->dests_id().front())) {
         auto shared_state = _sink->create_shared_state();
         if (shared_state) {
@@ -109,23 +109,21 @@ Status PipelineTask::prepare(const std::vector<TScanRangeParams>& scan_range, co
     }
 
     _scan_ranges = scan_range;
-    auto* parent_profile = _state->get_sink_local_state()->profile();
+    auto* parent_profile = _state->get_sink_local_state()->operator_profile();
 
-    for (int op_idx = _operators.size() - 1; op_idx >= 0; op_idx--) {
+    for (int op_idx = cast_set<int>(_operators.size() - 1); op_idx >= 0; op_idx--) {
         auto& op = _operators[op_idx];
         LocalStateInfo info {parent_profile, _scan_ranges, get_op_shared_state(op->operator_id()),
                              _shared_state_map, _task_idx};
         RETURN_IF_ERROR(op->setup_local_state(_state, info));
-        parent_profile = _state->get_local_state(op->operator_id())->profile();
+        parent_profile = _state->get_local_state(op->operator_id())->operator_profile();
     }
     {
-        std::vector<Dependency*> filter_dependencies;
-        const auto& deps = _state->get_local_state(_source->operator_id())->filter_dependencies();
-        std::copy(deps.begin(), deps.end(),
-                  std::inserter(filter_dependencies, filter_dependencies.end()));
-
+        const auto& deps =
+                _state->get_local_state(_source->operator_id())->execution_dependencies();
         std::unique_lock<std::mutex> lc(_dependency_lock);
-        filter_dependencies.swap(_filter_dependencies);
+        std::copy(deps.begin(), deps.end(),
+                  std::inserter(_execution_dependencies, _execution_dependencies.end()));
     }
     if (auto fragment = _fragment_context.lock()) {
         if (fragment->get_query_ctx()->is_cancelled()) {
@@ -212,8 +210,7 @@ bool PipelineTask::inject_shared_state(std::shared_ptr<BasicSharedState> shared_
 }
 
 void PipelineTask::_init_profile() {
-    _task_profile =
-            std::make_unique<RuntimeProfile>(fmt::format("PipelineTask (index={})", _index));
+    _task_profile = std::make_unique<RuntimeProfile>(fmt::format("PipelineTask(index={})", _index));
     _parent_profile->add_child(_task_profile.get(), true, nullptr);
     _task_cpu_timer = ADD_TIMER(_task_profile, "TaskCpuTime");
 
@@ -259,14 +256,24 @@ Status PipelineTask::_open() {
     return Status::OK();
 }
 
+Status PipelineTask::_prepare() {
+    SCOPED_TIMER(_task_profile->total_time_counter());
+    SCOPED_CPU_TIMER(_task_cpu_timer);
+    for (auto& o : _operators) {
+        RETURN_IF_ERROR(_state->get_local_state(o->operator_id())->prepare(_state));
+    }
+    RETURN_IF_ERROR(_state->get_sink_local_state()->prepare(_state));
+    return Status::OK();
+}
+
 bool PipelineTask::_wait_to_start() {
     // Before task starting, we should make sure
     // 1. Execution dependency is ready (which is controlled by FE 2-phase commit)
     // 2. Runtime filter dependencies are ready
-    return _execution_dep->is_blocked_by(shared_from_this()) ||
-           std::any_of(
-                   _filter_dependencies.begin(), _filter_dependencies.end(),
-                   [&](Dependency* dep) -> bool { return dep->is_blocked_by(shared_from_this()); });
+    // 3. All tablets are loaded into local storage
+    return std::any_of(
+            _execution_dependencies.begin(), _execution_dependencies.end(),
+            [&](Dependency* dep) -> bool { return dep->is_blocked_by(shared_from_this()); });
 }
 
 bool PipelineTask::_is_pending_finish() {
@@ -280,6 +287,16 @@ bool PipelineTask::_is_pending_finish() {
                    [&](Dependency* dep) -> bool { return dep->is_blocked_by(shared_from_this()); });
 }
 
+bool PipelineTask::is_blockable() const {
+    // Before task starting, we should make sure
+    // 1. Execution dependency is ready (which is controlled by FE 2-phase commit)
+    // 2. Runtime filter dependencies are ready
+    // 3. All tablets are loaded into local storage
+    return std::any_of(_operators.begin(), _operators.end(),
+                       [&](OperatorPtr op) -> bool { return op->is_blockable(_state); }) ||
+           _sink->is_blockable(_state);
+}
+
 bool PipelineTask::is_revoking() const {
     // Spilling may be in progress if eos is true.
     return std::any_of(_spill_dependencies.begin(), _spill_dependencies.end(),
@@ -289,7 +306,7 @@ bool PipelineTask::is_revoking() const {
 bool PipelineTask::_is_blocked() {
     // `_dry_run = true` means we do not need data from source operator.
     if (!_dry_run) {
-        for (int i = _read_dependencies.size() - 1; i >= 0; i--) {
+        for (int i = cast_set<int>(_read_dependencies.size() - 1); i >= 0; i--) {
             // `_read_dependencies` is organized according to operators. For each operator, running condition is met iff all dependencies are ready.
             for (auto* dep : _read_dependencies[i]) {
                 if (dep->is_blocked_by(shared_from_this())) {
@@ -317,22 +334,26 @@ void PipelineTask::terminate() {
     std::unique_lock<std::mutex> lc(_dependency_lock);
     auto fragment = _fragment_context.lock();
     if (!is_finalized() && fragment) {
-        DCHECK(_wake_up_early || fragment->is_canceled());
-        std::for_each(_spill_dependencies.begin(), _spill_dependencies.end(),
-                      [&](Dependency* dep) { dep->set_always_ready(); });
-        std::for_each(_filter_dependencies.begin(), _filter_dependencies.end(),
-                      [&](Dependency* dep) { dep->set_always_ready(); });
-        std::for_each(_write_dependencies.begin(), _write_dependencies.end(),
-                      [&](Dependency* dep) { dep->set_always_ready(); });
-        std::for_each(_finish_dependencies.begin(), _finish_dependencies.end(),
-                      [&](Dependency* dep) { dep->set_always_ready(); });
-        std::for_each(_read_dependencies.begin(), _read_dependencies.end(),
-                      [&](std::vector<Dependency*>& deps) {
-                          std::for_each(deps.begin(), deps.end(),
-                                        [&](Dependency* dep) { dep->set_always_ready(); });
-                      });
-        _execution_dep->set_ready();
-        _memory_sufficient_dependency->set_ready();
+        try {
+            DCHECK(_wake_up_early || fragment->is_canceled());
+            std::for_each(_spill_dependencies.begin(), _spill_dependencies.end(),
+                          [&](Dependency* dep) { dep->set_always_ready(); });
+            std::for_each(_write_dependencies.begin(), _write_dependencies.end(),
+                          [&](Dependency* dep) { dep->set_always_ready(); });
+            std::for_each(_finish_dependencies.begin(), _finish_dependencies.end(),
+                          [&](Dependency* dep) { dep->set_always_ready(); });
+            std::for_each(_read_dependencies.begin(), _read_dependencies.end(),
+                          [&](std::vector<Dependency*>& deps) {
+                              std::for_each(deps.begin(), deps.end(),
+                                            [&](Dependency* dep) { dep->set_always_ready(); });
+                          });
+            // All `_execution_deps` will never be set blocking from ready. So we just set ready here.
+            std::for_each(_execution_dependencies.begin(), _execution_dependencies.end(),
+                          [&](Dependency* dep) { dep->set_ready(); });
+            _memory_sufficient_dependency->set_ready();
+        } catch (const doris::Exception& e) {
+            LOG(WARNING) << "Terminate failed: " << e.code() << ", " << e.to_string();
+        }
     }
 }
 
@@ -357,15 +378,14 @@ Status PipelineTask::execute(bool* done) {
                                      debug_string());
     }
     auto fragment_context = _fragment_context.lock();
-    DCHECK(fragment_context);
+    if (!fragment_context) {
+        return Status::InternalError("Fragment already finished! Query: {}", print_id(_query_id));
+    }
     int64_t time_spent = 0;
     ThreadCpuStopWatch cpu_time_stop_watch;
     cpu_time_stop_watch.start();
     SCOPED_ATTACH_TASK(_state);
     Defer running_defer {[&]() {
-        if (_task_queue) {
-            _task_queue->update_statistics(this, time_spent);
-        }
         int64_t delta_cpu_time = cpu_time_stop_watch.elapsed_time();
         _task_cpu_timer->update(delta_cpu_time);
         fragment_context->get_query_ctx()->resource_ctx()->cpu_context()->update_cpu_cost_ms(
@@ -400,17 +420,18 @@ Status PipelineTask::execute(bool* done) {
     SCOPED_TIMER(_task_profile->total_time_counter());
     SCOPED_TIMER(_exec_timer);
 
+    if (!_wake_up_early) {
+        RETURN_IF_ERROR(_prepare());
+    }
     DBUG_EXECUTE_IF("fault_inject::PipelineXTask::execute", {
         Status status = Status::Error<INTERNAL_ERROR>("fault_inject pipeline_task execute failed");
         return status;
     });
     // `_wake_up_early` must be after `_wait_to_start()`
     if (_wait_to_start() || _wake_up_early) {
-        if (config::enable_prefetch_tablet) {
-            RETURN_IF_ERROR(_source->hold_tablets(_state));
-        }
         return Status::OK();
     }
+    RETURN_IF_ERROR(_prepare());
 
     // The status must be runnable
     if (!_opened && !fragment_context->is_canceled()) {
@@ -485,7 +506,11 @@ Status PipelineTask::execute(bool* done) {
             const auto reserve_size = _root->get_reserve_mem_size(_state);
             _root->reset_reserve_mem_size(_state);
 
-            if (workload_group && _state->get_query_ctx()->enable_reserve_memory() &&
+            if (workload_group &&
+                _state->get_query_ctx()
+                        ->resource_ctx()
+                        ->task_controller()
+                        ->is_enable_reserve_memory() &&
                 reserve_size > 0) {
                 if (!_try_to_reserve_memory(reserve_size, _root)) {
                     continue;
@@ -494,6 +519,7 @@ Status PipelineTask::execute(bool* done) {
 
             bool eos = false;
             RETURN_IF_ERROR(_root->get_block_after_projects(_state, block, &eos));
+            RETURN_IF_ERROR(block->check_type_and_column());
             _eos = eos;
         }
 
@@ -502,8 +528,11 @@ Status PipelineTask::execute(bool* done) {
             Status status = Status::OK();
             DEFER_RELEASE_RESERVED();
             COUNTER_UPDATE(_memory_reserve_times, 1);
-            if (_state->get_query_ctx()->enable_reserve_memory() && workload_group &&
-                !(_wake_up_early || _dry_run)) {
+            if (_state->get_query_ctx()
+                        ->resource_ctx()
+                        ->task_controller()
+                        ->is_enable_reserve_memory() &&
+                workload_group && !(_wake_up_early || _dry_run)) {
                 const auto sink_reserve_size = _sink->get_reserve_mem_size(_state, _eos);
                 if (sink_reserve_size > 0 &&
                     !_try_to_reserve_memory(sink_reserve_size, _sink.get())) {
@@ -550,6 +579,7 @@ Status PipelineTask::execute(bool* done) {
                     }
                 }
             });
+            RETURN_IF_ERROR(block->check_type_and_column());
             status = _sink->sink(_state, block, _eos);
 
             if (status.is<ErrorCode::END_OF_FILE>()) {
@@ -565,7 +595,7 @@ Status PipelineTask::execute(bool* done) {
         }
     }
 
-    RETURN_IF_ERROR(get_task_queue()->push_back(shared_from_this()));
+    RETURN_IF_ERROR(_state->get_query_ctx()->get_pipe_exec_scheduler()->submit(shared_from_this()));
     return Status::OK();
 }
 
@@ -601,7 +631,7 @@ bool PipelineTask::_try_to_reserve_memory(const size_t reserve_size, OperatorBas
                     print_id(_query_id), _sink->get_name(), _sink->node_id(), _state->task_id(),
                     PrettyPrinter::print_bytes(sink_revocable_mem_size));
             ExecEnv::GetInstance()->workload_group_mgr()->add_paused_query(
-                    _state->get_query_ctx()->shared_from_this(), reserve_size, st);
+                    _state->get_query_ctx()->resource_ctx()->shared_from_this(), reserve_size, st);
             _spilling = true;
             return false;
         } else {
@@ -671,9 +701,6 @@ Status PipelineTask::close(Status exec_status, bool close_sink) {
         _fresh_profile_counter();
     }
 
-    if (_task_queue) {
-        _task_queue->update_statistics(this, close_ns);
-    }
     if (close_sink) {
         RETURN_IF_ERROR(_state_transition(State::FINISHED));
     }
@@ -707,12 +734,14 @@ std::string PipelineTask::debug_string() {
 
     for (size_t i = 0; i < _operators.size(); i++) {
         fmt::format_to(debug_string_buffer, "\n{}",
-                       _opened && !is_finalized() ? _operators[i]->debug_string(_state, i)
-                                                  : _operators[i]->debug_string(i));
+                       _opened && !is_finalized()
+                               ? _operators[i]->debug_string(_state, cast_set<int>(i))
+                               : _operators[i]->debug_string(cast_set<int>(i)));
     }
     fmt::format_to(debug_string_buffer, "\n{}\n",
-                   _opened && !is_finalized() ? _sink->debug_string(_state, _operators.size())
-                                              : _sink->debug_string(_operators.size()));
+                   _opened && !is_finalized()
+                           ? _sink->debug_string(_state, cast_set<int>(_operators.size()))
+                           : _sink->debug_string(cast_set<int>(_operators.size())));
 
     fmt::format_to(debug_string_buffer, "\nRead Dependency Information: \n");
 
@@ -720,35 +749,35 @@ std::string PipelineTask::debug_string() {
     for (; i < _read_dependencies.size(); i++) {
         for (size_t j = 0; j < _read_dependencies[i].size(); j++) {
             fmt::format_to(debug_string_buffer, "{}. {}\n", i,
-                           _read_dependencies[i][j]->debug_string(i + 1));
+                           _read_dependencies[i][j]->debug_string(cast_set<int>(i) + 1));
         }
     }
 
     fmt::format_to(debug_string_buffer, "{}. {}\n", i,
-                   _memory_sufficient_dependency->debug_string(i++));
+                   _memory_sufficient_dependency->debug_string(cast_set<int>(i++)));
 
     fmt::format_to(debug_string_buffer, "\nWrite Dependency Information: \n");
     for (size_t j = 0; j < _write_dependencies.size(); j++, i++) {
         fmt::format_to(debug_string_buffer, "{}. {}\n", i,
-                       _write_dependencies[j]->debug_string(i + 1));
+                       _write_dependencies[j]->debug_string(cast_set<int>(j) + 1));
     }
 
-    fmt::format_to(debug_string_buffer, "\nRuntime Filter Dependency Information: \n");
-    for (size_t j = 0; j < _filter_dependencies.size(); j++, i++) {
+    fmt::format_to(debug_string_buffer, "\nExecution Dependency Information: \n");
+    for (size_t j = 0; j < _execution_dependencies.size(); j++, i++) {
         fmt::format_to(debug_string_buffer, "{}. {}\n", i,
-                       _filter_dependencies[j]->debug_string(i + 1));
+                       _execution_dependencies[j]->debug_string(cast_set<int>(i) + 1));
     }
 
     fmt::format_to(debug_string_buffer, "\nSpill Dependency Information: \n");
     for (size_t j = 0; j < _spill_dependencies.size(); j++, i++) {
         fmt::format_to(debug_string_buffer, "{}. {}\n", i,
-                       _spill_dependencies[j]->debug_string(i + 1));
+                       _spill_dependencies[j]->debug_string(cast_set<int>(i) + 1));
     }
 
     fmt::format_to(debug_string_buffer, "Finish Dependency Information: \n");
     for (size_t j = 0; j < _finish_dependencies.size(); j++, i++) {
         fmt::format_to(debug_string_buffer, "{}. {}\n", i,
-                       _finish_dependencies[j]->debug_string(j + 1));
+                       _finish_dependencies[j]->debug_string(cast_set<int>(i) + 1));
     }
     return fmt::to_string(debug_string_buffer);
 }
@@ -788,7 +817,7 @@ Status PipelineTask::wake_up(Dependency* dep) {
     _blocked_dep = nullptr;
     auto holder = std::dynamic_pointer_cast<PipelineTask>(shared_from_this());
     RETURN_IF_ERROR(_state_transition(PipelineTask::State::RUNNABLE));
-    RETURN_IF_ERROR(get_task_queue()->push_back(holder));
+    RETURN_IF_ERROR(_state->get_query_ctx()->get_pipe_exec_scheduler()->submit(holder));
     return Status::OK();
 }
 
@@ -808,4 +837,5 @@ Status PipelineTask::_state_transition(State new_state) {
     return Status::OK();
 }
 
+#include "common/compile_check_end.h"
 } // namespace doris::pipeline

@@ -28,6 +28,7 @@ import org.apache.doris.nereids.trees.expressions.Alias;
 import org.apache.doris.nereids.trees.expressions.And;
 import org.apache.doris.nereids.trees.expressions.Any;
 import org.apache.doris.nereids.trees.expressions.ArrayItemReference;
+import org.apache.doris.nereids.trees.expressions.Between;
 import org.apache.doris.nereids.trees.expressions.BinaryArithmetic;
 import org.apache.doris.nereids.trees.expressions.BinaryOperator;
 import org.apache.doris.nereids.trees.expressions.BitAnd;
@@ -52,7 +53,6 @@ import org.apache.doris.nereids.trees.expressions.IntegralDivide;
 import org.apache.doris.nereids.trees.expressions.IsNull;
 import org.apache.doris.nereids.trees.expressions.LessThan;
 import org.apache.doris.nereids.trees.expressions.LessThanEqual;
-import org.apache.doris.nereids.trees.expressions.ListQuery;
 import org.apache.doris.nereids.trees.expressions.MarkJoinSlotReference;
 import org.apache.doris.nereids.trees.expressions.Match;
 import org.apache.doris.nereids.trees.expressions.MatchAll;
@@ -115,6 +115,7 @@ import org.apache.doris.nereids.trees.expressions.literal.NullLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.SmallIntLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.StringLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.StructLiteral;
+import org.apache.doris.nereids.trees.expressions.literal.TimeV2Literal;
 import org.apache.doris.nereids.trees.expressions.literal.TinyIntLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.VarcharLiteral;
 
@@ -329,8 +330,16 @@ public abstract class ExpressionVisitor<R, C>
         return visitLiteral(mapLiteral, context);
     }
 
+    public R visitTimeV2Literal(TimeV2Literal timev2Literal, C context) {
+        return visitLiteral(timev2Literal, context);
+    }
+
     public R visitStructLiteral(StructLiteral structLiteral, C context) {
         return visitLiteral(structLiteral, context);
+    }
+
+    public R visitBetween(Between between, C context) {
+        return visit(between, context);
     }
 
     public R visitCompoundPredicate(CompoundPredicate compoundPredicate, C context) {
@@ -427,10 +436,6 @@ public abstract class ExpressionVisitor<R, C>
 
     public R visitScalarSubquery(ScalarSubquery scalar, C context) {
         return visitSubqueryExpr(scalar, context);
-    }
-
-    public R visitListQuery(ListQuery listQuery, C context) {
-        return visitSubqueryExpr(listQuery, context);
     }
 
     public R visitGroupingScalarFunction(GroupingScalarFunction groupingScalarFunction, C context) {

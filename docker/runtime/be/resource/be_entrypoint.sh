@@ -49,7 +49,7 @@ log_stderr()
     echo "[`date`] $@" >&2
 }
 
-function add_default_conf()
+function add_workloadgroup_config()
 {
     if [[ "x$ENABLE_WORKLOAD_GROUP" == "xtrue" ]]; then
           echo "doris_cgroup_cpu_path=$WORKLOAD_GROUP_PATH" >> ${DORIS_HOME}/conf/be.conf
@@ -172,7 +172,7 @@ parse_confval_from_conf()
     # a naive script to grep given confkey from fe conf file
     # assume conf format: ^\s*<key>\s*=\s*<value>\s*$
     local confkey=$1
-    local confvalue=`grep "\<$confkey\>" $BE_CONFIG | grep -v '^\s*#' | sed 's|^\s*'$confkey'\s*=\s*\(.*\)\s*$|\1|g'`
+    local confvalue=`grep "^\s*$confkey" $BE_CONFIG | grep -v '^\s*#' | sed 's|^\s*'$confkey'\s*=\s*\(.*\)\s*$|\1|g'`
     echo "$confvalue"
 }
 
@@ -282,7 +282,7 @@ function check_and_register()
     fi
 }
 
-function work_load_group_for_cgroup_path() {
+function make_dir_for_workloadgroup() {
     output=$(cat /proc/filesystems | grep cgroup)
     if [ -z "$output" ]; then
         log_stderr "[error] The host machine does not have cgroup installed, so the workload group function will be limited."
@@ -301,6 +301,19 @@ function work_load_group_for_cgroup_path() {
     fi
 }
 
+function post_exit() {
+    local log_dir=`parse_confval_from_conf "LOG_DIR"`
+    if [[ x"$log_dir" == "x" ]]; then
+        log_dir="/opt/apache-doris/be/log"
+    fi
+
+    if ls | grep "core"  &>/dev/null; then
+        local log_replace_var_dir=`eval echo ${log_dir}`
+        `ls $log_replace_var_dir | grep "core" | xargs -I {} rm $log_replace_var_dir/{}`
+        `ls /opt/apache-doris/ | grep "core" | xargs -I {} mv {} $log_replace_var_dir`
+    fi
+}
+
 fe_addrs=$1
 if [[ "x$fe_addrs" == "x" ]]; then
     echo "need fe address as paramter!"
@@ -310,7 +323,7 @@ fi
 
 if [[ "x$ENABLE_WORKLOAD_GROUP" == "xtrue" ]]; then
       log_stderr '[info] Enable workload group !'
-      work_load_group_for_cgroup_path
+      make_dir_for_workloadgroup
 fi
 
 
@@ -322,7 +335,7 @@ else
 fi
 
 update_conf_from_configmap
-add_default_conf
+add_workloadgroup_config
 mount_kerberos_config
 # resolve password for root to manage nodes in doris.
 resolve_password_from_secret
@@ -331,7 +344,9 @@ collect_env_info
 check_and_register $fe_addrs
 ./doris-debug --component be
 log_stderr "run start_be.sh"
+#allow create core file
+ulimit -c unlimited
 # the server will start in the current terminal session, and the log output and console interaction will be printed to that terminal
-# befor doris 2.0.2 ,doris start with : start_xx.sh
-# sine doris 2.0.2 ,doris start with : start_xx.sh --console  doc: https://doris.apache.org/docs/dev/install/standard-deployment/#version--202
 $DORIS_HOME/bin/start_be.sh --console
+log_stderr "run post_exit"
+post_exit

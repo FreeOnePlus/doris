@@ -33,7 +33,6 @@
 #include "common/logging.h"
 #include "common/status.h"
 #include "exec/tablet_info.h"
-#include "gutil/strings/numbers.h"
 #include "io/fs/file_writer.h" // IWYU pragma: keep
 #include "olap/data_dir.h"
 #include "olap/olap_define.h"
@@ -62,6 +61,7 @@
 #include "vec/sink/load_stream_stub.h"
 
 namespace doris {
+#include "common/compile_check_begin.h"
 using namespace ErrorCode;
 
 DeltaWriterV2::DeltaWriterV2(WriteRequest* req,
@@ -123,6 +123,7 @@ Status DeltaWriterV2::init() {
     context.data_dir = nullptr;
     context.partial_update_info = _partial_update_info;
     context.memtable_on_sink_support_index_v2 = true;
+    context.encrypt_algorithm = EncryptionAlgorithmPB::PLAINTEXT;
 
     _rowset_writer = std::make_shared<BetaRowsetWriterV2>(_streams);
     RETURN_IF_ERROR(_rowset_writer->init(context));
@@ -224,8 +225,9 @@ Status DeltaWriterV2::_build_current_tablet_schema(int64_t index_id,
 
     if (!indexes.empty() && !indexes[i]->columns.empty() &&
         indexes[i]->columns[0]->unique_id() >= 0) {
-        _tablet_schema->build_current_tablet_schema(index_id, table_schema_param->version(),
-                                                    indexes[i], ori_tablet_schema);
+        _tablet_schema->build_current_tablet_schema(
+                index_id, static_cast<int32_t>(table_schema_param->version()), indexes[i],
+                ori_tablet_schema);
     }
 
     _tablet_schema->set_table_id(table_schema_param->table_id());
@@ -238,6 +240,7 @@ Status DeltaWriterV2::_build_current_tablet_schema(int64_t index_id,
     RETURN_IF_ERROR(_partial_update_info->init(
             _req.tablet_id, _req.txn_id, *_tablet_schema,
             table_schema_param->unique_key_update_mode(),
+            table_schema_param->partial_update_new_key_policy(),
             table_schema_param->partial_update_input_columns(),
             table_schema_param->is_strict_mode(), table_schema_param->timestamp_ms(),
             table_schema_param->nano_seconds(), table_schema_param->timezone(),
@@ -245,4 +248,5 @@ Status DeltaWriterV2::_build_current_tablet_schema(int64_t index_id,
     return Status::OK();
 }
 
+#include "common/compile_check_end.h"
 } // namespace doris

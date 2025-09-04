@@ -20,6 +20,7 @@
 #include <curl/curl.h>
 #include <libbase64.h>
 
+#include <cmath>
 #include <sstream>
 
 namespace doris {
@@ -39,7 +40,9 @@ void url_encode(const std::string_view& in, std::string* out) {
         } else if (c == ' ') {
             os << '+';
         } else {
-            os << '%' << to_hex(c >> 4) << to_hex(c % 16);
+            ///TODO: In the past, there was an error here involving the modulus operation on a char (signed number).
+            // When the char data exceeds 128 (UTF-8 byte), it leads to incorrect results. It is actually better to use some third-party libraries here.
+            os << '%' << to_hex((unsigned char)c >> 4) << to_hex((unsigned char)c % 16);
         }
     }
 
@@ -80,9 +83,9 @@ bool url_decode(const std::string& in, std::string* out) {
 }
 
 void base64_encode(const std::string& in, std::string* out) {
-    out->resize(size_t(in.length() * (4.0 / 3) + 1));
-    auto len = base64_encode(reinterpret_cast<const unsigned char*>(in.c_str()), in.length(),
-                             (unsigned char*)out->c_str());
+    out->resize((size_t)(4.0 * std::ceil(in.length() / 3.0)));
+    auto len = base64_encode(reinterpret_cast<const unsigned char*>(in.data()), in.length(),
+                             (unsigned char*)out->data());
     out->resize(len);
 }
 
@@ -113,7 +116,7 @@ int64_t base64_decode(const char* data, size_t length, char* decoded_data) {
 bool base64_decode(const std::string& in, std::string* out) {
     out->resize(in.length());
 
-    int64_t len = base64_decode(in.c_str(), in.length(), out->data());
+    int64_t len = base64_decode(in.data(), in.length(), out->data());
     if (len < 0) {
         return false;
     }

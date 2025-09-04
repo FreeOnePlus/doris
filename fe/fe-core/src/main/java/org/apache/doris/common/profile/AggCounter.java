@@ -21,9 +21,9 @@ import java.util.LinkedList;
 
 // Counter means indicators field. The counter's name is key, the counter itself is value.
 public class AggCounter extends Counter {
-    Counter max;
-    Counter sum;
-    Counter min;
+    public Counter max;
+    public Counter sum;
+    public Counter min;
     int number;
 
     public AggCounter(org.apache.doris.thrift.TUnit type) {
@@ -54,6 +54,22 @@ public class AggCounter extends Counter {
         for (Counter counter : rhsCounter) {
             addCounter(counter);
         }
+    }
+
+    public void mergeCounter(AggCounter rhsAggCounter) {
+        if (rhsAggCounter == null) {
+            return;
+        }
+        if (number == 0) {
+            max.setValue(rhsAggCounter.max.getValue());
+            sum.setValue(rhsAggCounter.sum.getValue());
+            min.setValue(rhsAggCounter.min.getValue());
+        } else {
+            max.maxValue(rhsAggCounter.max);
+            sum.addValue(rhsAggCounter.sum);
+            min.minValue(rhsAggCounter.min);
+        }
+        number += rhsAggCounter.number;
     }
 
     public String print() {

@@ -17,9 +17,6 @@
 
 package org.apache.doris.catalog;
 
-import org.apache.doris.analysis.AlterResourceStmt;
-import org.apache.doris.analysis.CreateResourceStmt;
-import org.apache.doris.analysis.DropResourceStmt;
 import org.apache.doris.catalog.Resource.ResourceType;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.DdlException;
@@ -30,7 +27,9 @@ import org.apache.doris.common.proc.BaseProcResult;
 import org.apache.doris.common.proc.ProcNodeInterface;
 import org.apache.doris.common.proc.ProcResult;
 import org.apache.doris.mysql.privilege.PrivPredicate;
+import org.apache.doris.nereids.trees.plans.commands.CreateResourceCommand;
 import org.apache.doris.nereids.trees.plans.commands.DropResourceCommand;
+import org.apache.doris.nereids.trees.plans.commands.info.CreateResourceInfo;
 import org.apache.doris.persist.DropResourceOperationLog;
 import org.apache.doris.persist.gson.GsonUtils;
 import org.apache.doris.policy.Policy;
@@ -72,12 +71,13 @@ public class ResourceMgr implements Writable {
     public ResourceMgr() {
     }
 
-    public void createResource(CreateResourceStmt stmt) throws DdlException {
-        if (stmt.getResourceType() == ResourceType.UNKNOWN) {
+    public void createResource(CreateResourceCommand command) throws DdlException {
+        CreateResourceInfo info = command.getInfo();
+        if (info.getResourceType() == ResourceType.UNKNOWN) {
             throw new DdlException("Only support SPARK, ODBC_CATALOG ,JDBC, S3_COOLDOWN, S3, HDFS and HMS resource.");
         }
-        Resource resource = Resource.fromStmt(stmt);
-        if (createResource(resource, stmt.isIfNotExists())) {
+        Resource resource = Resource.fromCommand(command);
+        if (createResource(resource, info.isIfNotExists())) {
             Env.getCurrentEnv().getEditLog().logCreateResource(resource);
             LOG.info("Create resource success. Resource: {}", resource.getName());
         }
@@ -127,32 +127,6 @@ public class ResourceMgr implements Writable {
         LOG.info("Drop resource success. Resource resourceName: {}", resourceName);
     }
 
-    public void dropResource(DropResourceStmt stmt) throws DdlException {
-        String resourceName = stmt.getResourceName();
-        if (!nameToResource.containsKey(resourceName)) {
-            if (stmt.isIfExists()) {
-                return;
-            }
-            throw new DdlException("Resource(" + resourceName + ") does not exist");
-        }
-
-        Resource resource = nameToResource.get(resourceName);
-        resource.dropResource();
-
-        // Check whether the resource is in use before deleting it, except spark resource
-        StoragePolicy checkedStoragePolicy = StoragePolicy.ofCheck(null);
-        checkedStoragePolicy.setStorageResource(resourceName);
-        if (Env.getCurrentEnv().getPolicyMgr().existPolicy(checkedStoragePolicy)) {
-            Policy policy = Env.getCurrentEnv().getPolicyMgr().getPolicy(checkedStoragePolicy);
-            LOG.warn("Can not drop resource, since it's used in policy {}", policy.getPolicyName());
-            throw new DdlException("Can not drop resource, since it's used in policy " + policy.getPolicyName());
-        }
-        nameToResource.remove(resourceName);
-        // log drop
-        Env.getCurrentEnv().getEditLog().logDropResource(new DropResourceOperationLog(resourceName));
-        LOG.info("Drop resource success. Resource resourceName: {}", resourceName);
-    }
-
     // Drop resource whether successful or not
     public void dropResource(Resource resource) {
         String name = resource.getName();
@@ -165,10 +139,7 @@ public class ResourceMgr implements Writable {
         nameToResource.remove(operationLog.getName());
     }
 
-    public void alterResource(AlterResourceStmt stmt) throws DdlException {
-        String resourceName = stmt.getResourceName();
-        Map<String, String> properties = stmt.getProperties();
-
+    public void alterResource(String resourceName, Map<String, String> properties) throws DdlException {
         if (!nameToResource.containsKey(resourceName)) {
             throw new DdlException("Resource(" + resourceName + ") dose not exist.");
         }

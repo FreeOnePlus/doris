@@ -43,11 +43,11 @@ import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewOnlyScanRul
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilterAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilterJoinRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilterProjectJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilterScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectScanRule;
-import org.apache.doris.nereids.rules.expression.ExpressionNormalization;
-import org.apache.doris.nereids.rules.expression.ExpressionOptimization;
+import org.apache.doris.nereids.rules.expression.ExpressionNormalizationAndOptimization;
 import org.apache.doris.nereids.rules.implementation.AggregateStrategies;
 import org.apache.doris.nereids.rules.implementation.LogicalAssertNumRowsToPhysicalAssertNumRows;
 import org.apache.doris.nereids.rules.implementation.LogicalCTEAnchorToPhysicalCTEAnchor;
@@ -56,6 +56,7 @@ import org.apache.doris.nereids.rules.implementation.LogicalCTEProducerToPhysica
 import org.apache.doris.nereids.rules.implementation.LogicalDeferMaterializeOlapScanToPhysicalDeferMaterializeOlapScan;
 import org.apache.doris.nereids.rules.implementation.LogicalDeferMaterializeResultSinkToPhysicalDeferMaterializeResultSink;
 import org.apache.doris.nereids.rules.implementation.LogicalDeferMaterializeTopNToPhysicalDeferMaterializeTopN;
+import org.apache.doris.nereids.rules.implementation.LogicalDictionarySinkToPhysicalDictionarySink;
 import org.apache.doris.nereids.rules.implementation.LogicalEmptyRelationToPhysicalEmptyRelation;
 import org.apache.doris.nereids.rules.implementation.LogicalEsScanToPhysicalEsScan;
 import org.apache.doris.nereids.rules.implementation.LogicalExceptToPhysicalExcept;
@@ -86,7 +87,6 @@ import org.apache.doris.nereids.rules.implementation.LogicalTVFRelationToPhysica
 import org.apache.doris.nereids.rules.implementation.LogicalTopNToPhysicalTopN;
 import org.apache.doris.nereids.rules.implementation.LogicalUnionToPhysicalUnion;
 import org.apache.doris.nereids.rules.implementation.LogicalWindowToPhysicalWindow;
-import org.apache.doris.nereids.rules.rewrite.ConvertOuterJoinToAntiJoin;
 import org.apache.doris.nereids.rules.rewrite.CreatePartitionTopNFromWindow;
 import org.apache.doris.nereids.rules.rewrite.EliminateFilter;
 import org.apache.doris.nereids.rules.rewrite.EliminateOuterJoin;
@@ -94,7 +94,10 @@ import org.apache.doris.nereids.rules.rewrite.MaxMinFilterPushDown;
 import org.apache.doris.nereids.rules.rewrite.MergeFilters;
 import org.apache.doris.nereids.rules.rewrite.MergeGenerates;
 import org.apache.doris.nereids.rules.rewrite.MergeLimits;
-import org.apache.doris.nereids.rules.rewrite.MergeProjects;
+import org.apache.doris.nereids.rules.rewrite.MergeOneRowRelationIntoUnion;
+import org.apache.doris.nereids.rules.rewrite.MergeProjectable;
+import org.apache.doris.nereids.rules.rewrite.MergeSetOperations;
+import org.apache.doris.nereids.rules.rewrite.MergeSetOperationsExcept;
 import org.apache.doris.nereids.rules.rewrite.PushDownAliasThroughJoin;
 import org.apache.doris.nereids.rules.rewrite.PushDownExpressionsInHashCondition;
 import org.apache.doris.nereids.rules.rewrite.PushDownFilterThroughAggregation;
@@ -111,6 +114,7 @@ import org.apache.doris.nereids.rules.rewrite.PushDownLimitDistinctThroughJoin;
 import org.apache.doris.nereids.rules.rewrite.PushDownProjectThroughLimit;
 import org.apache.doris.nereids.rules.rewrite.PushDownTopNDistinctThroughJoin;
 import org.apache.doris.nereids.rules.rewrite.PushDownTopNThroughJoin;
+import org.apache.doris.nereids.rules.rewrite.PushProjectThroughUnion;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
@@ -150,23 +154,23 @@ public class RuleSet {
             new PushDownExpressionsInHashCondition(),
             new PushDownFilterThroughAggregation(),
             new PushDownFilterThroughRepeat(),
+            new MergeOneRowRelationIntoUnion(),
+            // PushProjectThroughUnion should invoke before PushDownFilterThroughSetOperation
+            new PushProjectThroughUnion(),
+            new MergeSetOperations(),
+            new MergeSetOperationsExcept(),
             new PushDownFilterThroughSetOperation(),
             new PushDownFilterThroughGenerate(),
             new PushDownProjectThroughLimit(),
             new EliminateOuterJoin(),
-            new ConvertOuterJoinToAntiJoin(),
-            new MergeProjects(),
+            new MergeProjectable(),
             new MergeFilters(),
             new MergeGenerates(),
             new MergeLimits(),
             new PushDownAliasThroughJoin(),
             new PushDownFilterThroughWindow(),
             new PushDownFilterThroughPartitionTopN(),
-            new ExpressionOptimization(),
-            // some useless predicates(e.g. 1=1) can be inferred by InferPredicates,
-            // the FoldConstantRule in ExpressionNormalization can fold 1=1 to true
-            // and EliminateFilter can eliminate the useless filter
-            new ExpressionNormalization(),
+            ExpressionNormalizationAndOptimization.NO_MIN_MAX_RANGE_INSTANCE,
             new EliminateFilter()
     );
 
@@ -209,6 +213,7 @@ public class RuleSet {
             .add(new LogicalFileSinkToPhysicalFileSink())
             .add(new LogicalResultSinkToPhysicalResultSink())
             .add(new LogicalDeferMaterializeResultSinkToPhysicalDeferMaterializeResultSink())
+            .add(new LogicalDictionarySinkToPhysicalDictionarySink())
             .build();
 
     // left-zig-zag tree is used when column stats are not available.
@@ -241,7 +246,7 @@ public class RuleSet {
             .addAll(OTHER_REORDER_RULES)
             .build();
 
-    public static final List<Rule> MATERIALIZED_VIEW_RULES = planRuleFactories()
+    public static final List<Rule> MATERIALIZED_VIEW_IN_CBO_RULES = planRuleFactories()
             .add(MaterializedViewProjectJoinRule.INSTANCE)
             .add(MaterializedViewFilterJoinRule.INSTANCE)
             .add(MaterializedViewFilterProjectJoinRule.INSTANCE)
@@ -257,6 +262,11 @@ public class RuleSet {
             .add(MaterializedViewProjectFilterScanRule.INSTANCE)
             .add(MaterializedViewAggregateOnNoneAggregateRule.INSTANCE)
             .add(MaterializedViewOnlyScanRule.INSTANCE)
+            .build();
+
+    public static final List<Rule> MATERIALIZED_VIEW_IN_RBO_RULES = planRuleFactories()
+            .addAll(MATERIALIZED_VIEW_IN_CBO_RULES)
+            .add(MaterializedViewProjectFilterProjectJoinRule.INSTANCE)
             .build();
 
     public static final List<Rule> DPHYP_REORDER_RULES = ImmutableList.<Rule>builder()
@@ -283,8 +293,8 @@ public class RuleSet {
         return IMPLEMENTATION_RULES;
     }
 
-    public List<Rule> getMaterializedViewRules() {
-        return MATERIALIZED_VIEW_RULES;
+    public List<Rule> getMaterializedViewInRBORules() {
+        return MATERIALIZED_VIEW_IN_RBO_RULES;
     }
 
     public static RuleFactories planRuleFactories() {

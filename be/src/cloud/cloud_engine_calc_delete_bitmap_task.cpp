@@ -145,7 +145,8 @@ void CloudTabletCalcDeleteBitmapTask::set_tablet_state(int64_t tablet_state) {
 }
 
 Status CloudTabletCalcDeleteBitmapTask::handle() const {
-    VLOG_DEBUG << "start calculate delete bitmap on tablet " << _tablet_id;
+    VLOG_DEBUG << "start calculate delete bitmap on tablet " << _tablet_id
+               << ", txn_id=" << _transaction_id;
     SCOPED_ATTACH_TASK(_mem_tracker);
     int64_t t1 = MonotonicMicros();
     auto base_tablet = DORIS_TRY(_engine.get_tablet(_tablet_id));
@@ -155,6 +156,11 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
         return Status::Error<ErrorCode::PUSH_TABLE_NOT_EXIST>(
                 "can't get tablet when calculate delete bitmap. tablet_id={}", _tablet_id);
     }
+    // After https://github.com/apache/doris/pull/50417, there may be multiple calc delete bitmap tasks
+    // with different signatures on the same (txn_id, tablet_id) load in same BE. We use _rowset_update_lock
+    // to avoid them being executed concurrently to avoid correctness problem.
+    std::unique_lock wrlock(tablet->get_rowset_update_lock());
+
     int64_t max_version = tablet->max_version_unlocked();
     int64_t t2 = MonotonicMicros();
 
@@ -251,6 +257,16 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
             DCHECK(invisible_rowsets.size() == i + 1);
         }
     }
+    DBUG_EXECUTE_IF("CloudCalcDbmTask.handle.return.block",
+                    auto target_tablet_id = dp->param<int64_t>("tablet_id", 0);
+                    if (target_tablet_id == tablet->tablet_id()) {DBUG_BLOCK});
+    DBUG_EXECUTE_IF("CloudCalcDbmTask.handle.return.inject_err", {
+        auto target_tablet_id = dp->param<int64_t>("tablet_id", 0);
+        if (target_tablet_id == tablet->tablet_id()) {
+            LOG_INFO("inject error when CloudTabletCalcDeleteBitmapTask::handle");
+            return Status::InternalError("injected error");
+        }
+    });
     auto total_update_delete_bitmap_time_us = MonotonicMicros() - t3;
     LOG(INFO) << "finish calculate delete bitmap on tablet"
               << ", table_id=" << tablet->table_id() << ", transaction_id=" << _transaction_id
@@ -311,7 +327,7 @@ Status CloudTabletCalcDeleteBitmapTask::_handle_rowset(
         int64_t next_visible_version =
                 txn_info.is_txn_load ? txn_info.next_visible_version : version;
         RETURN_IF_ERROR(tablet->save_delete_bitmap_to_ms(version, transaction_id, delete_bitmap,
-                                                         lock_id, next_visible_version));
+                                                         lock_id, next_visible_version, rowset));
 
         LOG(INFO) << "tablet=" << _tablet_id << ", " << txn_str
                   << ", publish_status=SUCCEED, not need to re-calculate delete_bitmaps.";
@@ -325,8 +341,8 @@ Status CloudTabletCalcDeleteBitmapTask::_handle_rowset(
                 LOG_INFO("inject error when CloudTabletCalcDeleteBitmapTask::_handle_rowset");
                 return Status::MemoryLimitExceeded("injected MemoryLimitExceeded error");
             });
-            RETURN_IF_ERROR(tablet->calc_delete_bitmap_between_segments(rowset->rowset_id(),
-                                                                        segments, delete_bitmap));
+            RETURN_IF_ERROR(tablet->calc_delete_bitmap_between_segments(
+                    rowset->tablet_schema(), rowset->rowset_id(), segments, delete_bitmap));
         }
 
         if (invisible_rowsets == nullptr) {

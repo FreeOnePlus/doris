@@ -74,7 +74,7 @@ TEST_F(OrcReaderConvertDictTest, ConvertDictColumnToStringColumnBasic) {
     std::vector<int32_t> indices = {0, 1, 2,
                                     3, 1, 0}; // "hello", "world", "doris", "test", "world", "hello"
     for (auto x : indices) {
-        dict_column->insert(x);
+        dict_column->insert(Field::create_field<TYPE_INT>(x));
     }
 
     // Create ORC type
@@ -82,7 +82,7 @@ TEST_F(OrcReaderConvertDictTest, ConvertDictColumnToStringColumnBasic) {
 
     TFileScanRangeParams params;
     TFileRangeDesc range;
-    auto reader = OrcReader::create_unique(params, range, "", nullptr, true);
+    auto reader = OrcReader::create_unique(params, range, "", nullptr, nullptr, true);
 
     // Execute conversion
     auto result_column = reader->_convert_dict_column_to_string_column(
@@ -108,7 +108,7 @@ TEST_F(OrcReaderConvertDictTest, ConvertDictColumnToStringColumnWithNulls) {
     auto dict_column = ColumnInt32::create();
     std::vector<int32_t> indices = {0, 1, 2, 1, 0};
     for (auto x : indices) {
-        dict_column->insert(x);
+        dict_column->insert(Field::create_field<TYPE_INT>(x));
     }
 
     // Prepare null map
@@ -119,7 +119,7 @@ TEST_F(OrcReaderConvertDictTest, ConvertDictColumnToStringColumnWithNulls) {
 
     TFileScanRangeParams params;
     TFileRangeDesc range;
-    auto _reader = OrcReader::create_unique(params, range, "", nullptr, true);
+    auto _reader = OrcReader::create_unique(params, range, "", nullptr, nullptr, true);
 
     // Execute conversion
     auto result_column = _reader->_convert_dict_column_to_string_column(
@@ -144,14 +144,14 @@ TEST_F(OrcReaderConvertDictTest, ConvertDictColumnToStringColumnChar) {
     auto dict_column = ColumnInt32::create();
     std::vector<int32_t> indices = {0, 1, 2, 1};
     for (auto x : indices) {
-        dict_column->insert(x);
+        dict_column->insert(Field::create_field<TYPE_INT>(x));
     }
 
     // Create ORC CHAR type
     auto orc_type_ptr = createPrimitiveType(orc::TypeKind::CHAR);
     TFileScanRangeParams params;
     TFileRangeDesc range;
-    auto _reader = OrcReader::create_unique(params, range, "", nullptr, true);
+    auto _reader = OrcReader::create_unique(params, range, "", nullptr, nullptr, true);
 
     // Execute conversion
     auto result_column = _reader->_convert_dict_column_to_string_column(
@@ -175,14 +175,14 @@ TEST_F(OrcReaderConvertDictTest, ConvertDictColumnToStringColumnEmpty) {
     auto dict_column = ColumnInt32::create();
     std::vector<int32_t> indices = {0, 0, 0};
     for (auto x : indices) {
-        dict_column->insert(x);
+        dict_column->insert(Field::create_field<TYPE_INT>(x));
     }
 
     // Create ORC type
     auto orc_type_ptr = createPrimitiveType(orc::TypeKind::STRING);
     TFileScanRangeParams params;
     TFileRangeDesc range;
-    auto _reader = OrcReader::create_unique(params, range, "", nullptr, true);
+    auto _reader = OrcReader::create_unique(params, range, "", nullptr, nullptr, true);
     // Execute conversion
     auto result_column = _reader->_convert_dict_column_to_string_column(
             dict_column.get(), nullptr, string_batch.get(), orc_type_ptr.get());
@@ -204,7 +204,7 @@ TEST_F(OrcReaderConvertDictTest, ConvertDictColumnToStringColumnMixed) {
     auto dict_column = ColumnInt32::create();
     std::vector<int32_t> indices = {0, 1, 2, 3, 4, 2, 1, 0};
     for (auto x : indices) {
-        dict_column->insert(x);
+        dict_column->insert(Field::create_field<TYPE_INT>(x));
     }
 
     // Prepare partial null values
@@ -214,7 +214,7 @@ TEST_F(OrcReaderConvertDictTest, ConvertDictColumnToStringColumnMixed) {
     auto orc_type_ptr = createPrimitiveType(orc::TypeKind::STRING);
     TFileScanRangeParams params;
     TFileRangeDesc range;
-    auto _reader = OrcReader::create_unique(params, range, "", nullptr, true);
+    auto _reader = OrcReader::create_unique(params, range, "", nullptr, nullptr, true);
     // Execute conversion
     auto result_column = _reader->_convert_dict_column_to_string_column(
             dict_column.get(), &null_map, string_batch.get(), orc_type_ptr.get());

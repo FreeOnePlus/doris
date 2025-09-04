@@ -38,11 +38,10 @@
 
 // 1. datatype meta info:
 //         get_type_id, get_type_as_type_descriptor, get_storage_field_type, have_subtypes, get_pdata_type (const IDataType *data_type), to_pb_column_meta (PColumnMeta *col_meta)
-//         get_family_name, get_is_parametric, should_align_right_in_pretty_formats
-//         text_can_contain_only_valid_utf8
+//         get_family_name, get_is_parametric,
 //         have_maximum_size_of_value, get_maximum_size_of_value_in_memory, get_size_of_value_in_memory
 //         get_precision, get_scale
-//         is_null_literal, is_value_represented_by_number, is_value_unambiguously_represented_in_contiguous_memory_region
+//         is_null_literal
 // 2. datatype creation with column : create_column, create_column_const (size_t size, const Field &field), create_column_const_with_default_value (size_t size), get_uncompressed_serialized_bytes (const IColumn &column, int be_exec_version)
 // 3. serde related: get_serde (int nesting_level=1)
 //          to_string (const IColumn &column, size_t row_num, BufferWritable &ostr), to_string (const IColumn &column, size_t row_num), to_string_batch (const IColumn &column, ColumnString &column_to), from_string (ReadBuffer &rb, IColumn *column)
@@ -63,26 +62,23 @@ public:
 };
 
 TEST_P(DataTypeFixedLengthObjectTest, MetaInfoTest) {
-    TypeDescriptor bitmap_type_descriptor = {PrimitiveType::INVALID_TYPE};
+    auto bitmap_type_descriptor = std::make_shared<DataTypeFixedLengthObject>();
     auto col_meta = std::make_shared<PColumnMeta>();
     col_meta->set_type(PGenericType_TypeId_FIXEDLENGTHOBJECT);
     CommonDataTypeTest::DataTypeMetaInfo bitmap_meta_info_to_assert = {
-            .type_id = TypeIndex::FixedLengthObject,
-            .type_as_type_descriptor = &bitmap_type_descriptor,
+            .type_id = PrimitiveType::
+                    INVALID_TYPE, // we dont have one for this type now. but type_id is not used now.
+            .type_as_type_descriptor = bitmap_type_descriptor,
             .family_name = "DataTypeFixedLengthObject",
             .has_subtypes = false,
             .storage_field_type = doris::FieldType::OLAP_FIELD_TYPE_NONE,
-            .should_align_right_in_pretty_formats = false,
-            .text_can_contain_only_valid_utf8 = false,
             .have_maximum_size_of_value = false,
             .size_of_value_in_memory = size_t(-1),
             .precision = size_t(-1),
             .scale = size_t(-1),
             .is_null_literal = false,
-            .is_value_represented_by_number = false,
             .pColumnMeta = col_meta.get(),
-            .is_value_unambiguously_represented_in_contiguous_memory_region = false,
-            .default_field = Field(String()),
+            .default_field = Field::create_field<TYPE_STRING>(String()),
     };
     helper->meta_info_assert(datatype_fixed_length, bitmap_meta_info_to_assert);
 }
@@ -91,7 +87,7 @@ TEST_P(DataTypeFixedLengthObjectTest, CreateColumnTest) {
     std::string res;
     res.resize(8);
     memset(res.data(), 0, 8);
-    Field default_field = Field(res);
+    Field default_field = Field::create_field<TYPE_STRING>(res);
     std::cout << "create_column_assert: " << datatype_fixed_length->get_name() << std::endl;
     auto column = (datatype_fixed_length)->create_column();
     ASSERT_EQ(column->size(), 0);

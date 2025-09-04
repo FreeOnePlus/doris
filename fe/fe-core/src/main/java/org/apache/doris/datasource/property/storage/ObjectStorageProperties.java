@@ -34,4 +34,17 @@ public interface ObjectStorageProperties {
 
     void setEndpoint(String endpoint);
 
+    void setRegion(String region);
+
+    String getSessionToken();
+
+    String getMaxConnections();
+
+    String getRequestTimeoutS();
+
+    String getConnectionTimeoutS();
+
+    String getUsePathStyle();
+
+    String getForceParsingByStandardUrl();
 }

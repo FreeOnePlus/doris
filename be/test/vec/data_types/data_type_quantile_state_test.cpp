@@ -22,6 +22,7 @@
 #include <iostream>
 
 #include "agent/be_exec_version_manager.h"
+#include "runtime/define_primitive_type.h"
 #include "vec/columns/column.h"
 #include "vec/core/field.h"
 #include "vec/core/types.h"
@@ -36,11 +37,10 @@
 // for example DataTypeQuantileState should test this function:
 // 1. datatype meta info:
 //         get_type_id, get_type_as_type_descriptor, get_storage_field_type, have_subtypes, get_pdata_type (const IDataType *data_type), to_pb_column_meta (PColumnMeta *col_meta)
-//         get_family_name, get_is_parametric, should_align_right_in_pretty_formats
-//         text_can_contain_only_valid_utf8
+//         get_family_name, get_is_parametric,
 //         have_maximum_size_of_value, get_maximum_size_of_value_in_memory, get_size_of_value_in_memory
 //         get_precision, get_scale
-//         is_null_literal, is_value_represented_by_number, is_value_unambiguously_represented_in_contiguous_memory_region
+//         is_null_literal
 // 2. datatype creation with column : create_column, create_column_const (size_t size, const Field &field), create_column_const_with_default_value (size_t size), get_uncompressed_serialized_bytes (const IColumn &column, int be_exec_version)
 // 3. serde related: get_serde (int nesting_level=1)
 //          to_string (const IColumn &column, size_t row_num, BufferWritable &ostr), to_string (const IColumn &column, size_t row_num), to_string_batch (const IColumn &column, ColumnString &column_to)
@@ -63,32 +63,29 @@ public:
 };
 
 TEST_P(DataTypeQuantileStateTest, MetaInfoTest) {
-    TypeDescriptor quantile_state_type_descriptor = {PrimitiveType::TYPE_QUANTILE_STATE};
+    auto quantile_state_type_descriptor =
+            DataTypeFactory::instance().create_data_type(PrimitiveType::TYPE_QUANTILE_STATE, false);
     auto col_meta = std::make_shared<PColumnMeta>();
     col_meta->set_type(PGenericType_TypeId_QUANTILE_STATE);
     CommonDataTypeTest::DataTypeMetaInfo quantile_state_meta_info_to_assert = {
-            .type_id = TypeIndex::QuantileState,
-            .type_as_type_descriptor = &quantile_state_type_descriptor,
+            .type_id = PrimitiveType::TYPE_QUANTILE_STATE,
+            .type_as_type_descriptor = quantile_state_type_descriptor,
             .family_name = "QuantileState",
             .has_subtypes = false,
             .storage_field_type = doris::FieldType::OLAP_FIELD_TYPE_QUANTILE_STATE,
-            .should_align_right_in_pretty_formats = false,
-            .text_can_contain_only_valid_utf8 = true,
             .have_maximum_size_of_value = false,
             .size_of_value_in_memory = size_t(-1),
             .precision = size_t(-1),
             .scale = size_t(-1),
             .is_null_literal = false,
-            .is_value_represented_by_number = false,
             .pColumnMeta = col_meta.get(),
-            .is_value_unambiguously_represented_in_contiguous_memory_region = true,
-            .default_field = QuantileState(),
+            .default_field = Field::create_field<TYPE_QUANTILE_STATE>(QuantileState()),
     };
     helper->meta_info_assert(datatype_quantile_state, quantile_state_meta_info_to_assert);
 }
 
 TEST_P(DataTypeQuantileStateTest, CreateColumnTest) {
-    Field default_field_quantile_state = QuantileState();
+    Field default_field_quantile_state = Field::create_field<TYPE_QUANTILE_STATE>(QuantileState());
     helper->create_column_assert(datatype_quantile_state, default_field_quantile_state, 17);
 }
 

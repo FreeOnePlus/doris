@@ -88,6 +88,12 @@ public:
     }
 
     /**
+     * Pipeline task is blockable means it will be blocked in the next run. So we should put it into
+     * the blocking task scheduler.
+     */
+    bool is_blockable() const;
+
+    /**
      * `shared_state` is shared by different pipeline tasks. This function aims to establish
      * connections across related tasks.
      *
@@ -122,12 +128,6 @@ public:
 
     // Execution phase should be terminated. This is called if this task is canceled or waken up early.
     void terminate();
-
-    PipelineTask& set_task_queue(MultiCoreTaskQueue* task_queue) {
-        _task_queue = task_queue;
-        return *this;
-    }
-    MultiCoreTaskQueue* get_task_queue() { return _task_queue; }
 
     // 1 used for update priority queue
     // note(wb) an ugly implementation, need refactor later
@@ -182,6 +182,7 @@ private:
     void _init_profile();
     void _fresh_profile_counter();
     Status _open();
+    Status _prepare();
 
     // Operator `op` try to reserve memory before executing. Return false if reserve failed
     // otherwise return true.
@@ -197,7 +198,6 @@ private:
     std::unique_ptr<vectorized::Block> _block;
 
     std::weak_ptr<PipelineFragmentContext> _fragment_context;
-    MultiCoreTaskQueue* _task_queue = nullptr;
 
     // used for priority queue
     // it may be visited by different thread but there is no race condition
@@ -238,7 +238,7 @@ private:
     std::vector<Dependency*> _spill_dependencies;
     std::vector<Dependency*> _write_dependencies;
     std::vector<Dependency*> _finish_dependencies;
-    std::vector<Dependency*> _filter_dependencies;
+    std::vector<Dependency*> _execution_dependencies;
 
     // All shared states of this pipeline task.
     std::map<int, std::shared_ptr<BasicSharedState>> _op_shared_states;
@@ -253,7 +253,6 @@ private:
     unsigned long long _exec_time_slice = config::pipeline_task_exec_time_slice * NANOS_PER_MILLIS;
     Dependency* _blocked_dep = nullptr;
 
-    Dependency* _execution_dep = nullptr;
     Dependency* _memory_sufficient_dependency;
     std::mutex _dependency_lock;
 

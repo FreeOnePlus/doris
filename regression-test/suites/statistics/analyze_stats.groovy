@@ -265,8 +265,7 @@ suite("test_analyze") {
     sql """analyze table agg_table_test with sample rows 100 with sync"""
     def agg_result = sql """show column stats agg_table_test (name)"""
     logger.info("show column agg_table_test(name) stats: " + agg_result)
-    assertEquals(agg_result[0][7], "N/A")
-    assertEquals(agg_result[0][8], "N/A")
+    assertEquals(0, agg_result.size())
 
     // Continue test partition load data for the first time.
     def reported = false;
@@ -2967,16 +2966,24 @@ PARTITION `p599` VALUES IN (599)
     """
     sql """analyze table region with sync"""
     def versionResult = sql """show column stats region"""
-    assertEquals(versionResult[0][16], "1")
-    assertEquals(versionResult[1][16], "1")
-    assertEquals(versionResult[2][16], "1")
+    if (!isCloudMode()) {
+        assertEquals(versionResult[0][16], "1")
+        assertEquals(versionResult[1][16], "1")
+        assertEquals(versionResult[2][16], "1")
+    }
 
     sql """insert into region values (1, "1", "1")"""
     sql """analyze table region with sync"""
-    versionResult = sql """show column stats region"""
-    assertEquals(versionResult[0][16], "2")
-    assertEquals(versionResult[1][16], "2")
-    assertEquals(versionResult[2][16], "2")
+    def newVersionResult = sql """show column stats region"""
+    if (!isCloudMode()) {
+        assertEquals(newVersionResult[0][16], "2")
+        assertEquals(newVersionResult[1][16], "2")
+        assertEquals(newVersionResult[2][16], "2")
+    } else {
+        assertTrue(versionResult[0][16] < newVersionResult[0][16])
+        assertTrue(versionResult[1][16] < newVersionResult[1][16])
+        assertTrue(versionResult[2][16] < newVersionResult[2][16])
+    }
 
     sql """drop database if exists test_version"""
 }

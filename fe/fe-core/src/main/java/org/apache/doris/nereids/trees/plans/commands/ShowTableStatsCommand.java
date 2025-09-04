@@ -17,7 +17,6 @@
 
 package org.apache.doris.nereids.trees.plans.commands;
 
-import org.apache.doris.analysis.RedirectStatus;
 import org.apache.doris.analysis.StmtType;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.DatabaseIf;
@@ -31,6 +30,7 @@ import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
+import org.apache.doris.common.util.Util;
 import org.apache.doris.datasource.CatalogIf;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.trees.plans.PlanType;
@@ -249,7 +249,12 @@ public class ShowTableStatsCommand extends ShowCommand {
                 LocalDateTime.ofInstant(Instant.ofEpochMilli(tableStatistic.lastAnalyzeTime),
                 java.time.ZoneId.systemDefault());
         row.add(dateTime.format(formatter));
-        row.add(tableStatistic.analyzeColumns().toString());
+        Set<Pair<String, String>> columnsSet = tableStatistic.analyzeColumns();
+        Set<Pair<String, String>> newColumnsSet = new HashSet<>();
+        for (Pair<String, String> pair : columnsSet) {
+            newColumnsSet.add(Pair.of(Util.getTempTableDisplayName(pair.first), pair.second));
+        }
+        row.add(newColumnsSet.toString());
         row.add(tableStatistic.jobType.toString());
         row.add(String.valueOf(tableStatistic.partitionChanged.get()));
         row.add(String.valueOf(tableStatistic.userInjected));
@@ -350,11 +355,6 @@ public class ShowTableStatsCommand extends ShowCommand {
     @Override
     public <R, C> R accept(PlanVisitor<R, C> visitor, C context) {
         return visitor.visitShowTableStatsCommand(this, context);
-    }
-
-    @Override
-    public RedirectStatus toRedirectStatus() {
-        return RedirectStatus.FORWARD_NO_SYNC;
     }
 
     @Override

@@ -29,9 +29,10 @@
 #include <vector>
 
 #include "vec/common/allocator.h"
+#include "vec/common/allocator_fwd.h"
 
 namespace doris {
-
+#include "common/compile_check_begin.h"
 class faststring;
 
 /// @brief A wrapper around externally allocated data.
@@ -273,6 +274,13 @@ public:
         }
         return buf;
     }
+
+    // X is (maybe) a truncated prefix of string X'
+    // Y is (maybe) a truncated prefix of string Y'
+    // return true only if we can determine that X' is strictly less than Y'
+    // based on these maybe truncated prefixes
+    static bool lhs_is_strictly_less_than_rhs(Slice X, bool X_is_truncated, Slice Y,
+                                              bool Y_is_truncated);
 };
 
 inline std::ostream& operator<<(std::ostream& os, const Slice& slice) {
@@ -291,7 +299,7 @@ inline bool operator!=(const Slice& x, const Slice& y) {
 }
 
 inline int Slice::compare(const Slice& b) const {
-    const int min_len = (size < b.size) ? size : b.size;
+    const auto min_len = (size < b.size) ? size : b.size;
     int r = mem_compare(data, b.data, min_len);
     if (r == 0) {
         if (size < b.size)
@@ -368,3 +376,4 @@ private:
 };
 
 } // namespace doris
+#include "common/compile_check_end.h"

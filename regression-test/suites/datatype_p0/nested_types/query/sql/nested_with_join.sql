@@ -1,4 +1,5 @@
 use regression_test_datatype_p0_nested_types_query;
+SET enable_insert_strict = false;
 
 SET ENABLE_DECIMAL256 = TRUE;
 

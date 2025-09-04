@@ -30,6 +30,7 @@
 #include "runtime/tablets_channel.h"
 #include "runtime/thread_context.h"
 #include "runtime/workload_group/workload_group_manager.h"
+#include "util/debug_points.h"
 
 namespace doris {
 
@@ -59,11 +60,10 @@ LoadChannel::LoadChannel(const UniqueId& load_id, int64_t timeout_s, bool is_hig
         _resource_ctx->memory_context()->set_mem_tracker(mem_tracker);
         WorkloadGroupPtr wg_ptr = nullptr;
         if (wg_id > 0) {
-            wg_ptr = ExecEnv::GetInstance()->workload_group_mgr()->get_group(wg_id);
-            if (wg_ptr != nullptr) {
-                wg_ptr->add_mem_tracker_limiter(mem_tracker);
-                _resource_ctx->set_workload_group(wg_ptr);
-            }
+            std::vector<uint64_t> id_set;
+            id_set.push_back(wg_id);
+            wg_ptr = ExecEnv::GetInstance()->workload_group_mgr()->get_group(id_set);
+            _resource_ctx->set_workload_group(wg_ptr);
         }
     }
 
@@ -106,6 +106,10 @@ Status LoadChannel::open(const PTabletWriterOpenRequest& params) {
         return Status::InternalError(
                 "The txn expiration of PTabletWriterOpenRequest is invalid, value={}",
                 params.txn_expiration());
+    }
+    if (_resource_ctx->workload_group() != nullptr) {
+        RETURN_IF_ERROR(_resource_ctx->workload_group()->add_resource_ctx(
+                _resource_ctx->task_controller()->task_id(), _resource_ctx));
     }
     SCOPED_ATTACH_TASK(_resource_ctx);
 
@@ -172,6 +176,8 @@ Status LoadChannel::_get_tablets_channel(std::shared_ptr<BaseTabletsChannel>& ch
 
 Status LoadChannel::add_batch(const PTabletWriterAddBlockRequest& request,
                               PTabletWriterAddBlockResult* response) {
+    DBUG_EXECUTE_IF("LoadChannel.add_batch.failed",
+                    { return Status::InternalError("fault injection"); });
     SCOPED_TIMER(_add_batch_timer);
     COUNTER_UPDATE(_add_batch_times, 1);
     SCOPED_ATTACH_TASK(_resource_ctx);
@@ -289,6 +295,7 @@ bool LoadChannel::is_finished() {
 }
 
 Status LoadChannel::cancel() {
+    _cancelled.store(true);
     std::lock_guard<std::mutex> l(_lock);
     for (auto& it : _tablets_channels) {
         static_cast<void>(it.second->cancel());

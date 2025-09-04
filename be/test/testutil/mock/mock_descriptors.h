@@ -27,12 +27,6 @@
 
 namespace doris {
 
-class MockSlotDescriptor : public SlotDescriptor {
-public:
-    doris::vectorized::DataTypePtr get_data_type_ptr() const override { return type; }
-    vectorized::DataTypePtr type;
-};
-
 class MockTupleDescriptor : public TupleDescriptor {
 public:
     const std::vector<SlotDescriptor*>& slots() const override { return Slots; }
@@ -46,8 +40,8 @@ public:
     MockRowDescriptor(std::vector<vectorized::DataTypePtr> types, ObjectPool* pool) {
         std::vector<SlotDescriptor*> slots;
         for (auto type : types) {
-            auto* slot = pool->add(new MockSlotDescriptor());
-            slot->type = type;
+            auto* slot = pool->add(new SlotDescriptor());
+            slot->_type = type;
             slots.push_back(slot);
             _num_slots++;
         }
@@ -63,13 +57,23 @@ public:
     std::vector<TupleDescriptor*> tuple_desc_map;
 };
 
+class MockSlotDescriptor : public SlotDescriptor {
+public:
+    MockSlotDescriptor(int32_t col_unique_id) : _mock_col_unique_id(col_unique_id) {}
+
+    int32_t col_unique_id() const override { return _mock_col_unique_id; }
+
+private:
+    int32_t _mock_col_unique_id = -1;
+};
+
 class MockDescriptorTbl : public DescriptorTbl {
 public:
     MockDescriptorTbl(std::vector<vectorized::DataTypePtr> types, ObjectPool* pool) {
         std::vector<SlotDescriptor*> slots;
         for (auto type : types) {
-            auto* slot = pool->add(new MockSlotDescriptor());
-            slot->type = type;
+            auto* slot = pool->add(new SlotDescriptor());
+            slot->_type = type;
             slots.push_back(slot);
         }
         auto* tuple_desc = pool->add(new MockTupleDescriptor());
@@ -81,6 +85,34 @@ public:
     MOCK_METHOD(std::vector<TupleDescriptor*>, get_tuple_descs, (), (const));
 
     std::vector<TupleDescriptor*> tuple_descriptors;
+};
+
+class MockSlopDescriptor : public SlotDescriptor {
+public:
+    MockSlopDescriptor(int32_t col_unique_id) : _mock_col_unique_id(col_unique_id) {}
+
+    int32_t col_unique_id() const override { return _mock_col_unique_id; }
+
+private:
+    int32_t _mock_col_unique_id = -1;
+};
+
+class MockDescriptorTbl1 : public DescriptorTbl {
+public:
+    MockDescriptorTbl1() = default;
+
+    void add_slot_descriptor(SlotId slot_id, int32_t col_unique_id) {
+        auto slot_desc = std::make_unique<MockSlopDescriptor>(col_unique_id);
+        _slot_descriptors[slot_id] = std::move(slot_desc);
+    }
+
+    SlotDescriptor* get_slot_descriptor(SlotId id) const override {
+        auto it = _slot_descriptors.find(id);
+        return it != _slot_descriptors.end() ? it->second.get() : nullptr;
+    }
+
+private:
+    mutable std::unordered_map<SlotId, std::unique_ptr<MockSlopDescriptor>> _slot_descriptors;
 };
 
 } // namespace doris

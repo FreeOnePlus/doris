@@ -17,28 +17,21 @@
 
 #include "util/system_metrics.h"
 
-#include <ctype.h>
-// IWYU pragma: no_include <bthread/errno.h>
-#include <errno.h> // IWYU pragma: keep
+#include <absl/strings/str_split.h>
 #include <glog/logging.h>
-#include <inttypes.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #include <functional>
 #include <ostream>
 #include <unordered_map>
 #include <utility>
 
-#include "gutil/strings/split.h" // for string split
-#include "gutil/strtoint.h"      //  for atoi64
+#include "common/cast_set.h"
 #include "runtime/memory/jemalloc_control.h"
 #include "util/cgroup_util.h"
 #include "util/perf_counters.h"
 
 namespace doris {
-
+#include "common/compile_check_begin.h"
 DEFINE_COUNTER_METRIC_PROTOTYPE_2ARG(avail_cpu_num, MetricUnit::NOUNIT);
 
 DEFINE_COUNTER_METRIC_PROTOTYPE_2ARG(host_cpu_num, MetricUnit::NOUNIT);
@@ -739,7 +732,7 @@ void SystemMetrics::_update_snmp_metrics() {
     }
 
     // We only care about Tcp lines, so skip other lines in front of Tcp line
-    int res = 0;
+    int64_t res = 0;
     while ((res = getline(&_line_ptr, &_line_buf_size, fp)) > 0) {
         if (strstr(_line_ptr, "Tcp") != nullptr) {
             break;
@@ -755,7 +748,7 @@ void SystemMetrics::_update_snmp_metrics() {
 
     // parse the Tcp header
     // Tcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts InCsumErrors
-    std::vector<std::string> headers = strings::Split(_line_ptr, " ");
+    std::vector<std::string> headers = absl::StrSplit(_line_ptr, " ");
     std::unordered_map<std::string, int32_t> header_map;
     int32_t pos = 0;
     for (auto& h : headers) {
@@ -773,16 +766,16 @@ void SystemMetrics::_update_snmp_metrics() {
 
     // metric line looks like:
     // Tcp: 1 200 120000 -1 47849374 38601877 3353843 2320314 276 1033354613 1166025166 825439 12694 23238924 0
-    std::vector<std::string> metrics = strings::Split(_line_ptr, " ");
+    std::vector<std::string> metrics = absl::StrSplit(_line_ptr, " ");
     if (metrics.size() != headers.size()) {
         LOG(WARNING) << "invalid tcp metrics line: " << _line_ptr;
         fclose(fp);
         return;
     }
-    int64_t retrans_segs = atoi64(metrics[header_map["RetransSegs"]]);
-    int64_t in_errs = atoi64(metrics[header_map["InErrs"]]);
-    int64_t in_segs = atoi64(metrics[header_map["InSegs"]]);
-    int64_t out_segs = atoi64(metrics[header_map["OutSegs"]]);
+    int64_t retrans_segs = std::stoll(metrics[header_map["RetransSegs"]]);
+    int64_t in_errs = std::stoll(metrics[header_map["InErrs"]]);
+    int64_t in_segs = std::stoll(metrics[header_map["InSegs"]]);
+    int64_t out_segs = std::stoll(metrics[header_map["OutSegs"]]);
     _snmp_metrics->snmp_tcp_retrans_segs->set_value(retrans_segs);
     _snmp_metrics->snmp_tcp_in_errs->set_value(in_errs);
     _snmp_metrics->snmp_tcp_in_segs->set_value(in_segs);
@@ -1012,7 +1005,8 @@ void SystemMetrics::_update_proc_metrics() {
 void SystemMetrics::update_be_avail_cpu_num() {
     int64_t physical_cpu_num = _cpu_num_metrics->host_cpu_num->value();
     if (physical_cpu_num > 0) {
-        physical_cpu_num = CGroupUtil::get_cgroup_limited_cpu_number(physical_cpu_num);
+        physical_cpu_num =
+                CGroupUtil::get_cgroup_limited_cpu_number(cast_set<int32_t>(physical_cpu_num));
         _cpu_num_metrics->avail_cpu_num->set_value(physical_cpu_num);
     }
 }

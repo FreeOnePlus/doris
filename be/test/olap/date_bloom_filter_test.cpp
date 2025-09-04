@@ -150,16 +150,19 @@ TEST_F(DateBloomFilterTest, query_index_test) {
     EXPECT_TRUE(_tablet->add_rowset(rowset).ok());
 
     segment_v2::SegmentSharedPtr segment;
-    EXPECT_TRUE(((BetaRowset*)rowset.get())->load_segment(0, &segment).ok());
+    EXPECT_TRUE(((BetaRowset*)rowset.get())->load_segment(0, nullptr, &segment).ok());
     std::shared_ptr<SegmentFooterPB> footer_pb_shared;
-    auto st = segment->_get_segment_footer(footer_pb_shared);
+    auto st = segment->_get_segment_footer(footer_pb_shared, nullptr);
     EXPECT_TRUE(st.ok());
-    st = segment->_create_column_readers(*footer_pb_shared);
+    st = segment->_create_column_meta(*footer_pb_shared);
     EXPECT_TRUE(st.ok());
 
     // date
     {
-        const auto& reader = segment->_column_readers[0];
+        std::shared_ptr<ColumnReader> reader;
+        OlapReaderStatistics stats;
+        st = segment->get_column_reader(_tablet_schema->column_by_uid(0), &reader, &stats);
+        EXPECT_TRUE(st.ok());
         std::unique_ptr<BloomFilterIndexIterator> bf_iter;
         EXPECT_TRUE(reader->_bloom_filter_index->load(true, true, nullptr).ok());
         EXPECT_TRUE(reader->_bloom_filter_index->new_iterator(&bf_iter, nullptr).ok());
@@ -178,7 +181,10 @@ TEST_F(DateBloomFilterTest, query_index_test) {
 
     // datetime
     {
-        const auto& reader = segment->_column_readers[1];
+        std::shared_ptr<ColumnReader> reader;
+        OlapReaderStatistics stats;
+        st = segment->get_column_reader(_tablet_schema->column_by_uid(1), &reader, &stats);
+        EXPECT_TRUE(st.ok());
         std::unique_ptr<BloomFilterIndexIterator> bf_iter;
         EXPECT_TRUE(reader->_bloom_filter_index->load(true, true, nullptr).ok());
         EXPECT_TRUE(reader->_bloom_filter_index->new_iterator(&bf_iter, nullptr).ok());
@@ -230,16 +236,19 @@ TEST_F(DateBloomFilterTest, in_list_predicate_test) {
     EXPECT_TRUE(_tablet->add_rowset(rowset).ok());
 
     segment_v2::SegmentSharedPtr segment;
-    EXPECT_TRUE(((BetaRowset*)rowset.get())->load_segment(0, &segment).ok());
+    EXPECT_TRUE(((BetaRowset*)rowset.get())->load_segment(0, nullptr, &segment).ok());
     std::shared_ptr<SegmentFooterPB> footer_pb_shared;
-    auto st = segment->_get_segment_footer(footer_pb_shared);
+    auto st = segment->_get_segment_footer(footer_pb_shared, nullptr);
     EXPECT_TRUE(st.ok());
-    st = segment->_create_column_readers(*(footer_pb_shared));
+    st = segment->_create_column_meta(*(footer_pb_shared));
     EXPECT_TRUE(st.ok());
 
     // Test DATE column with IN predicate
     {
-        const auto& reader = segment->_column_readers[0];
+        std::shared_ptr<ColumnReader> reader;
+        OlapReaderStatistics stats;
+        st = segment->get_column_reader(_tablet_schema->column_by_uid(0), &reader, &stats);
+        EXPECT_TRUE(st.ok());
         std::unique_ptr<BloomFilterIndexIterator> bf_iter;
         EXPECT_TRUE(reader->_bloom_filter_index->load(true, true, nullptr).ok());
         EXPECT_TRUE(reader->_bloom_filter_index->new_iterator(&bf_iter, nullptr).ok());
@@ -289,7 +298,10 @@ TEST_F(DateBloomFilterTest, in_list_predicate_test) {
 
     // Test DATETIME column with IN predicate
     {
-        const auto& reader = segment->_column_readers[1];
+        std::shared_ptr<ColumnReader> reader;
+        OlapReaderStatistics stats;
+        st = segment->get_column_reader(_tablet_schema->column_by_uid(1), &reader, &stats);
+        EXPECT_TRUE(st.ok());
         std::unique_ptr<BloomFilterIndexIterator> bf_iter;
         EXPECT_TRUE(reader->_bloom_filter_index->load(true, true, nullptr).ok());
         EXPECT_TRUE(reader->_bloom_filter_index->new_iterator(&bf_iter, nullptr).ok());

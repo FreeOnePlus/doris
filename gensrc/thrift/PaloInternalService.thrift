@@ -39,20 +39,20 @@ const i32 INVALID_PLAN_NODE_ID = -1
 const i64 DEFAULT_PARTITION_ID = -1;
 
 enum TQueryType {
-    SELECT,
-    LOAD,
-    EXTERNAL
+    SELECT = 0,
+    LOAD = 1,
+    EXTERNAL = 2
 }
 
 enum TErrorHubType {
-    MYSQL,
-    BROKER,
-    NULL_TYPE
+    MYSQL = 0,
+    BROKER = 1,
+    NULL_TYPE = 2
 }
 
 enum TPrefetchMode {
-    NONE,
-    HT_BUCKET
+    NONE = 0,
+    HT_BUCKET = 1
 }
 
 struct TMysqlErrorHubInfo {
@@ -392,6 +392,17 @@ struct TQueryOptions {
   161: optional i64 low_memory_mode_buffer_limit = 33554432
   162: optional bool dump_heap_profile_when_mem_limit_exceeded = false
   163: optional bool inverted_index_compatible_read = false
+  164: optional bool check_orc_init_sargs_success = false
+  165: optional i32 exchange_multi_blocks_byte_size = 262144 
+  // true to use strict cast mode.
+  166: optional bool enable_strict_cast = false
+  167: optional bool new_version_unix_timestamp = false
+
+  168: optional i32 hnsw_ef_search = 32;
+  169: optional bool hnsw_check_relative_distance = true;
+  170: optional bool hnsw_bounded_queue = true; 
+
+  171: optional bool optimize_index_scan_parallelism = false;
 
   // For cloud, to control if the content would be written into file cache
   // In write path, to control if the content would be written into file cache.
@@ -501,7 +512,7 @@ struct TQueryGlobals {
 // Service Protocol Details
 
 enum PaloInternalServiceVersion {
-  V1
+  V1 = 0
 }
 
 struct TTxnParams {
@@ -719,6 +730,19 @@ enum TCompoundType {
     NOT = 3,
 }
 
+struct TLLMResource {
+  1: required string endpoint
+  2: required string provider_type
+  3: required string model_name
+  4: optional string api_key
+  5: optional double temperature
+  6: optional i64 max_tokens
+  7: optional i32 max_retries
+  8: optional i32 retry_delay_second
+  9: optional string anthropic_version
+  10: optional i32 dimensions
+}
+
 struct TCondition {
     1:  required string column_name
     2:  required string condition_op
@@ -800,6 +824,7 @@ struct TPipelineFragmentParams {
   43: optional Types.TNetworkAddress current_connect_fe
   // Used by 2.1
   44: optional list<i32> topn_filter_source_node_ids
+  45: optional map<string, TLLMResource> llm_resources
 
   // For cloud
   1000: optional bool is_mow_table;

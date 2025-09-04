@@ -54,8 +54,6 @@ class TupleDescriptor;
 namespace io {
 struct IOContext;
 } // namespace io
-struct TypeDescriptor;
-
 namespace vectorized {
 template <typename T>
 class ColumnStr;
@@ -74,8 +72,8 @@ public:
 
     IcebergTableReader(std::unique_ptr<GenericReader> file_format_reader, RuntimeProfile* profile,
                        RuntimeState* state, const TFileScanRangeParams& params,
-                       const TFileRangeDesc& range, ShardedKVCache* kv_cache,
-                       io::IOContext* io_ctx);
+                       const TFileRangeDesc& range, ShardedKVCache* kv_cache, io::IOContext* io_ctx,
+                       FileMetaCache* meta_cache);
     ~IcebergTableReader() override = default;
 
     Status init_row_filters() final;
@@ -119,9 +117,9 @@ protected:
     Status _equality_delete_base(const std::vector<TIcebergDeleteFileDesc>& delete_files);
     virtual std::unique_ptr<GenericReader> _create_equality_reader(
             const TFileRangeDesc& delete_desc) = 0;
-    void _generate_equality_delete_block(
-            Block* block, const std::vector<std::string>& equality_delete_col_names,
-            const std::vector<TypeDescriptor>& equality_delete_col_types);
+    void _generate_equality_delete_block(Block* block,
+                                         const std::vector<std::string>& equality_delete_col_names,
+                                         const std::vector<DataTypePtr>& equality_delete_col_types);
     // Equality delete should read the primary columns. Add the missing columns
     Status _expand_block_if_need(Block* block);
     // Remove the added delete columns
@@ -131,9 +129,9 @@ protected:
     ShardedKVCache* _kv_cache;
     IcebergProfile _iceberg_profile;
     std::vector<int64_t> _iceberg_delete_rows;
-
     std::vector<std::string> _expand_col_names;
     std::vector<ColumnWithTypeAndName> _expand_columns;
+    std::vector<std::string> _all_required_col_names;
 
     Fileformat _file_format = Fileformat::NONE;
 
@@ -141,7 +139,6 @@ protected:
     const std::string ICEBERG_ROW_POS = "pos";
     const std::string ICEBERG_FILE_PATH = "file_path";
     const std::vector<std::string> delete_file_col_names {ICEBERG_ROW_POS, ICEBERG_FILE_PATH};
-    const std::vector<TypeDescriptor> delete_file_col_types {{TYPE_STRING}, {TYPE_BIGINT}};
     const int ICEBERG_FILE_PATH_INDEX = 0;
     const int ICEBERG_FILE_POS_INDEX = 1;
     const int READ_DELETE_FILE_BATCH_SIZE = 102400;
@@ -164,13 +161,12 @@ public:
     IcebergParquetReader(std::unique_ptr<GenericReader> file_format_reader, RuntimeProfile* profile,
                          RuntimeState* state, const TFileScanRangeParams& params,
                          const TFileRangeDesc& range, ShardedKVCache* kv_cache,
-                         io::IOContext* io_ctx)
+                         io::IOContext* io_ctx, FileMetaCache* meta_cache)
             : IcebergTableReader(std::move(file_format_reader), profile, state, params, range,
-                                 kv_cache, io_ctx) {}
+                                 kv_cache, io_ctx, meta_cache) {}
     Status init_reader(
             const std::vector<std::string>& file_col_names,
-            const std::unordered_map<int32_t, std::string>& col_id_name_map,
-            std::unordered_map<std::string, ColumnValueRangeType>* colname_to_value_range,
+            const std::unordered_map<std::string, ColumnValueRangeType>* colname_to_value_range,
             const VExprContextSPtrs& conjuncts, const TupleDescriptor* tuple_descriptor,
             const RowDescriptor* row_descriptor,
             const std::unordered_map<std::string, int>* colname_to_slot_id,
@@ -185,15 +181,13 @@ public:
         parquet_reader->set_delete_rows(&_iceberg_delete_rows);
     }
 
-    Status get_file_col_id_to_name(bool& exist_schema,
-                                   std::map<int32_t, std::string>& file_col_id_to_name) final;
-
 protected:
     std::unique_ptr<GenericReader> _create_equality_reader(
             const TFileRangeDesc& delete_desc) final {
-        return ParquetReader::create_unique(
-                _profile, _params, delete_desc, READ_DELETE_FILE_BATCH_SIZE,
-                const_cast<cctz::time_zone*>(&_state->timezone_obj()), _io_ctx, _state);
+        return ParquetReader::create_unique(_profile, _params, delete_desc,
+                                            READ_DELETE_FILE_BATCH_SIZE,
+                                            const_cast<cctz::time_zone*>(&_state->timezone_obj()),
+                                            _io_ctx, _state, _meta_cache);
     }
 };
 class IcebergOrcReader final : public IcebergTableReader {
@@ -205,9 +199,10 @@ public:
 
     IcebergOrcReader(std::unique_ptr<GenericReader> file_format_reader, RuntimeProfile* profile,
                      RuntimeState* state, const TFileScanRangeParams& params,
-                     const TFileRangeDesc& range, ShardedKVCache* kv_cache, io::IOContext* io_ctx)
+                     const TFileRangeDesc& range, ShardedKVCache* kv_cache, io::IOContext* io_ctx,
+                     FileMetaCache* meta_cache)
             : IcebergTableReader(std::move(file_format_reader), profile, state, params, range,
-                                 kv_cache, io_ctx) {}
+                                 kv_cache, io_ctx, meta_cache) {}
 
     void set_delete_rows() final {
         auto* orc_reader = (OrcReader*)_file_format_reader.get();
@@ -216,26 +211,23 @@ public:
 
     Status init_reader(
             const std::vector<std::string>& file_col_names,
-            const std::unordered_map<int32_t, std::string>& col_id_name_map,
-            std::unordered_map<std::string, ColumnValueRangeType>* colname_to_value_range,
+            const std::unordered_map<std::string, ColumnValueRangeType>* colname_to_value_range,
             const VExprContextSPtrs& conjuncts, const TupleDescriptor* tuple_descriptor,
             const RowDescriptor* row_descriptor,
             const std::unordered_map<std::string, int>* colname_to_slot_id,
             const VExprContextSPtrs* not_single_slot_filter_conjuncts,
             const std::unordered_map<int, VExprContextSPtrs>* slot_id_to_filter_conjuncts);
 
-    Status get_file_col_id_to_name(bool& exist_schema,
-                                   std::map<int32_t, std::string>& file_col_id_to_name) final;
-
 protected:
     std::unique_ptr<GenericReader> _create_equality_reader(
             const TFileRangeDesc& delete_desc) override {
         return OrcReader::create_unique(_profile, _state, _params, delete_desc,
-                                        READ_DELETE_FILE_BATCH_SIZE, _state->timezone(), _io_ctx);
+                                        READ_DELETE_FILE_BATCH_SIZE, _state->timezone(), _io_ctx,
+                                        _meta_cache);
     }
 
 private:
-    const std::string ICEBERG_ORC_ATTRIBUTE = "iceberg.id";
+    static const std::string ICEBERG_ORC_ATTRIBUTE;
 };
 
 } // namespace vectorized

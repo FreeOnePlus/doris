@@ -18,7 +18,7 @@
 import org.apache.doris.regression.suite.ClusterOptions
 
 suite('test_temp_table_with_restart', 'p0,docker') {
-    options = new ClusterOptions()
+    def options = new ClusterOptions()
     options.setFeNum(2)
     options.setBeNum(1)
     options.connectToFollower = true
@@ -64,7 +64,7 @@ suite('test_temp_table_with_restart', 'p0,docker') {
         }
 
         select_result10 = sql "show data"
-        containTempTable = false
+        def containTempTable = false
         for(int i = 0; i < select_result10.size(); i++) {
             if (select_result10[i][0].contains("t_test_temp_table5")) {
                 containTempTable = true;

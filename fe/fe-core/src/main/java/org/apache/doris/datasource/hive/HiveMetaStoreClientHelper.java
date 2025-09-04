@@ -96,6 +96,9 @@ public class HiveMetaStoreClientHelper {
     public static final String HIVE_JSON_SERDE = "org.apache.hive.hcatalog.data.JsonSerDe";
     public static final String LEGACY_HIVE_JSON_SERDE = "org.apache.hadoop.hive.serde2.JsonSerDe";
     public static final String OPENX_JSON_SERDE = "org.openx.data.jsonserde.JsonSerDe";
+    public static final String HIVE_TEXT_SERDE = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe";
+    public static final String HIVE_OPEN_CSV_SERDE = "org.apache.hadoop.hive.serde2.OpenCSVSerde";
+    public static final String HIVE_MULTI_DELIMIT_SERDE = "org.apache.hadoop.hive.serde2.MultiDelimitSerDe";
 
     public enum HiveFileFormat {
         TEXT_FILE(0, "text"),
@@ -713,7 +716,10 @@ public class HiveMetaStoreClientHelper {
         return Type.UNSUPPORTED;
     }
 
-    public static String showCreateTable(org.apache.hadoop.hive.metastore.api.Table remoteTable) {
+    public static String showCreateTable(HMSExternalTable hmsTable) {
+        // Always use the latest schema
+        HMSExternalCatalog catalog = (HMSExternalCatalog) hmsTable.getCatalog();
+        Table remoteTable = catalog.getClient().getTable(hmsTable.getRemoteDbName(), hmsTable.getRemoteName());
         StringBuilder output = new StringBuilder();
         if (remoteTable.isSetViewOriginalText() || remoteTable.isSetViewExpandedText()) {
             output.append(String.format("CREATE VIEW `%s` AS ", remoteTable.getTableName()));
@@ -803,7 +809,8 @@ public class HiveMetaStoreClientHelper {
         return output.toString();
     }
 
-    public static InternalSchema getHudiTableSchema(HMSExternalTable table, boolean[] enableSchemaEvolution) {
+    public static InternalSchema getHudiTableSchema(HMSExternalTable table, boolean[] enableSchemaEvolution,
+            String timestamp) {
         HoodieTableMetaClient metaClient = table.getHudiClient();
         TableSchemaResolver schemaUtil = new TableSchemaResolver(metaClient);
 
@@ -815,7 +822,7 @@ public class HiveMetaStoreClientHelper {
         // So, we should reload timeline so that we can read the latest commit files.
         metaClient.reloadActiveTimeline();
 
-        Option<InternalSchema> internalSchemaOption = schemaUtil.getTableInternalSchemaFromCommitMetadata();
+        Option<InternalSchema> internalSchemaOption = schemaUtil.getTableInternalSchemaFromCommitMetadata(timestamp);
 
         if (internalSchemaOption.isPresent()) {
             enableSchemaEvolution[0] = true;

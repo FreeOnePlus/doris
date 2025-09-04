@@ -25,9 +25,9 @@
 #include <memory>
 
 #include "agent/be_exec_version_manager.h"
+#include "runtime/define_primitive_type.h"
 #include "vec/columns/column.h"
 #include "vec/columns/column_fixed_length_object.h"
-#include "vec/columns/columns_number.h"
 #include "vec/common/assert_cast.h"
 #include "vec/common/schema_util.h"
 #include "vec/core/field.h"
@@ -37,14 +37,14 @@
 #include "vec/data_types/data_type.h"
 #include "vec/data_types/data_type_factory.hpp"
 #include "vec/data_types/data_type_nullable.h"
+#include "vec/data_types/data_type_number.h"
 
 // 1. datatype meta info:
 //         get_type_id, get_type_as_type_descriptor, get_storage_field_type, have_subtypes, get_pdata_type (const IDataType *data_type), to_pb_column_meta (PColumnMeta *col_meta)
-//         get_family_name, get_is_parametric, should_align_right_in_pretty_formats
-//         text_can_contain_only_valid_utf8
+//         get_family_name, get_is_parametric,
 //         have_maximum_size_of_value, get_maximum_size_of_value_in_memory, get_size_of_value_in_memory
 //         get_precision, get_scale
-//         is_null_literal, is_value_represented_by_number, is_value_unambiguously_represented_in_contiguous_memory_region
+//         is_null_literal
 // 2. datatype creation with column : create_column, create_column_const (size_t size, const Field &field), create_column_const_with_default_value (size_t size), get_uncompressed_serialized_bytes (const IColumn &column, int be_exec_version)
 // 3. serde related: get_serde (int nesting_level=1)
 //          to_string (const IColumn &column, size_t row_num, BufferWritable &ostr), to_string (const IColumn &column, size_t row_num), to_string_batch (const IColumn &column, ColumnString &column_to), from_string (ReadBuffer &rb, IColumn *column)
@@ -72,26 +72,22 @@ public:
 };
 
 TEST_P(DataTypeAggStateTest, MetaInfoTest) {
-    TypeDescriptor agg_state_type_descriptor = {PrimitiveType::TYPE_AGG_STATE};
+    auto agg_state_type_descriptor = std::make_shared<DataTypeAggState>();
     auto col_meta = std::make_shared<PColumnMeta>();
     col_meta->set_type(PGenericType_TypeId_AGG_STATE);
     CommonDataTypeTest::DataTypeMetaInfo agg_state_meta_info_to_assert = {
-            .type_id = TypeIndex::AggState,
-            .type_as_type_descriptor = &agg_state_type_descriptor,
+            .type_id = PrimitiveType::TYPE_AGG_STATE,
+            .type_as_type_descriptor = agg_state_type_descriptor,
             .family_name = "AggState",
             .has_subtypes = false,
             .storage_field_type = doris::FieldType::OLAP_FIELD_TYPE_AGG_STATE,
-            .should_align_right_in_pretty_formats = false,
-            .text_can_contain_only_valid_utf8 = false,
             .have_maximum_size_of_value = false,
             .size_of_value_in_memory = size_t(-1),
             .precision = size_t(-1),
             .scale = size_t(-1),
             .is_null_literal = false,
-            .is_value_represented_by_number = false,
             .pColumnMeta = col_meta.get(),
-            .is_value_unambiguously_represented_in_contiguous_memory_region = true,
-            .default_field = Field(String()),
+            .default_field = Field::create_field<TYPE_STRING>(String()),
     };
     helper->meta_info_assert(datatype_agg_state_count, agg_state_meta_info_to_assert);
 }
@@ -100,7 +96,7 @@ TEST_P(DataTypeAggStateTest, CreateColumnTest) {
     std::string res;
     res.resize(8);
     memset(res.data(), 0, 8);
-    Field default_field = Field(res);
+    Field default_field = Field::create_field<TYPE_STRING>(res);
     std::cout << "create_column_assert: " << datatype_agg_state_count->get_name() << std::endl;
     auto column = (datatype_agg_state_count)->create_column();
     ASSERT_EQ(column->size(), 0);
@@ -125,8 +121,9 @@ void insert_data_agg_state(MutableColumns* agg_state_cols, DataTypePtr datatype_
     std::cout << "insert_data_agg_state: " << datatype_agg_state->get_name() << " "
               << column_fixed->get_name() << std::endl;
     if (column_fixed->is_column_string()) {
-        ASSERT_TRUE(is_string(assert_cast<const DataTypeAggState*>(datatype_agg_state.get())
-                                      ->get_serialized_type()));
+        ASSERT_TRUE(is_string_type(assert_cast<const DataTypeAggState*>(datatype_agg_state.get())
+                                           ->get_serialized_type()
+                                           ->get_primitive_type()));
         auto* column = assert_cast<ColumnString*>((*agg_state_cols)[0].get());
         for (size_t i = 0; i != rows_value; ++i) {
             auto val = std::to_string(i);
@@ -139,9 +136,10 @@ void insert_data_agg_state(MutableColumns* agg_state_cols, DataTypePtr datatype_
     } else {
         assert_cast<ColumnFixedLengthObject*>((*agg_state_cols)[0].get())->set_item_size(8);
         column_fixed->resize(rows_value);
-        ASSERT_TRUE(is_fixed_length_object(
-                assert_cast<const DataTypeAggState*>(datatype_agg_state.get())
-                        ->get_serialized_type()));
+        ASSERT_EQ(assert_cast<const DataTypeAggState*>(datatype_agg_state.get())
+                          ->get_serialized_type()
+                          ->get_primitive_type(),
+                  TYPE_FIXED_LENGTH_OBJECT);
         auto& data = assert_cast<ColumnFixedLengthObject*>((*agg_state_cols)[0].get())->get_data();
         for (size_t i = 0; i != rows_value; ++i) {
             data[i] = i;
@@ -168,7 +166,7 @@ TEST_P(DataTypeAggStateTest, FromAndToStringTest) {
         for (int i = 0; i < col_to->size(); ++i) {
             std::string s = col_to->get_data_at(i).to_string();
             std::cout << "s: " << s << std::endl;
-            ReadBuffer rb(s.data(), s.size());
+            StringRef rb(s.data(), s.size());
             ASSERT_EQ(Status::OK(),
                       datatype_agg_state_hll_union->from_string(rb, assert_column.get()));
             ASSERT_EQ(assert_column->operator[](i), agg_state_cols[0]->get_ptr()->operator[](i))
@@ -197,7 +195,7 @@ TEST_P(DataTypeAggStateTest, FromAndToStringTest) {
         auto assert_column_1 = datatype_agg_state_hll_union->create_column();
         for (int i = 0; i < ser_col->size(); ++i) {
             std::string s = ser_col->get_data_at(i).to_string();
-            ReadBuffer rb(s.data(), s.size());
+            StringRef rb(s.data(), s.size());
             ASSERT_EQ(Status::OK(),
                       datatype_agg_state_hll_union->from_string(rb, assert_column_1.get()));
             auto aaa = assert_column_1->operator[](i);

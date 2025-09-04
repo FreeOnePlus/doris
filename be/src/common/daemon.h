@@ -19,7 +19,6 @@
 
 #include <vector>
 
-#include "gutil/ref_counted.h"
 #include "util/countdown_latch.h"
 #include "util/thread.h"
 
@@ -39,7 +38,6 @@ public:
 private:
     void tcmalloc_gc_thread();
     void memory_maintenance_thread();
-    void memory_gc_thread();
     void memtable_memory_refresh_thread();
     void calculate_metrics_thread();
     void je_reset_dirty_decay_thread() const;
@@ -50,6 +48,6 @@ private:
     void calculate_workload_group_metrics_thread();
 
     CountDownLatch _stop_background_threads_latch;
-    std::vector<scoped_refptr<Thread>> _threads;
+    std::vector<std::shared_ptr<Thread>> _threads;
 };
 } // namespace doris
