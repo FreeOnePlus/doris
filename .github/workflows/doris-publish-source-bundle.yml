@@ -1,0 +1,43 @@
+name: Doris publish recovery source bundle
+
+on:
+  push:
+    branches:
+      - diagnostics/doris-publish-build-20260923
+    paths:
+      - .github/workflows/doris-publish-source-bundle.yml
+
+permissions:
+  contents: read
+
+jobs:
+  source-bundle:
+    if: github.repository == 'FreeOnePlus/doris'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fa687bd9d5e534253697df086d3ce4d8e3709148
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Package public sources for offline review
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/doris-publish-source
+          git rev-parse HEAD > /tmp/doris-publish-source/BASE_COMMIT
+          tar -czf /tmp/doris-publish-source/sources.tar.gz \
+            AGENTS.md .clang-format .clang-tidy .github/PULL_REQUEST_TEMPLATE.md \
+            be/src be/test be/AGENTS.md be/README.md be/CMakeLists.txt \
+            build-support .claude/skills build.sh run-be-ut.sh run-regression-test.sh \
+            env.sh thirdparty/build-thirdparty.sh \
+            regression-test/suites/fault_injection_p0 regression-test/framework \
+            gensrc/proto/olap_file.proto
+          sha256sum /tmp/doris-publish-source/sources.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doris-publish-source-fa687bd9
+          path: /tmp/doris-publish-source/
+          retention-days: 1
+          if-no-files-found: error
