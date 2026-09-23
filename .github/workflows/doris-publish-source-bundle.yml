@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/doris-publish-source-bundle.yml
       - .github/doris-publish-recovery.patch.b64
+      - .github/doris-publish-clone-followup.patch
 
 permissions:
   contents: write
@@ -22,23 +23,34 @@ jobs:
     timeout-minutes: 20
     env:
       BASE: fa687bd9d5e534253697df086d3ce4d8e3709148
+      PARENT: ff25636067956550a33ace30d55bcc72fcd3050e
       TARGET: fix/mow-pending-publish-recovery
       EVIDENCE: /tmp/doris-publish-validation
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Apply pinned source patch
+      - name: Apply pinned source patch and Clone fence correction
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE"
           base64 --decode .github/doris-publish-recovery.patch.b64 | gzip -d > "$EVIDENCE/input.patch"
+          cp .github/doris-publish-clone-followup.patch "$EVIDENCE/clone-followup.patch"
           echo '010022431ecfa55008096537ae1943d36893b0e6a4db93bb9e5dc54a2aaed314  /tmp/doris-publish-validation/input.patch' | sha256sum -c -
-          git fetch --no-tags --depth=1 origin "$BASE"
+          git fetch --no-tags --depth=1 origin "$BASE" "$PARENT"
           git checkout --detach "$BASE"
           git apply --check "$EVIDENCE/input.patch"
           git apply "$EVIDENCE/input.patch"
+          git apply --check "$EVIDENCE/clone-followup.patch"
+          git apply "$EVIDENCE/clone-followup.patch"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('be/test/storage/async_publish_recovery_test.cpp')
+          s = p.read_text()
+          assert 'NormalPublishWinningRaceIsIdempotent' in s
+          p.write_text(s.replace('NormalPublishWinningRaceIsIdempotent', 'AlreadyPublishedVersionIsIdempotent'))
+          PY
           cat > "$EVIDENCE/allowed.txt" <<'EOF'
           be/src/agent/task_worker_pool.cpp
           be/src/storage/data_dir.cpp
@@ -63,7 +75,6 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           clang-format --version | tee "$EVIDENCE/clang-format-version.txt"
           bash build-support/clang-format.sh > "$EVIDENCE/clang-format.log" 2>&1
-          # The repository script formats the full tree. Do not include unrelated files.
           python3 - <<'PY'
           import os, pathlib, subprocess
           allowed = set(pathlib.Path(os.environ['EVIDENCE'], 'allowed.txt').read_text().splitlines())
@@ -86,10 +97,14 @@ jobs:
           tar -czf "$EVIDENCE/changed-sources.tar.gz" -T "$EVIDENCE/allowed.txt"
           printf '%s\n' "$BASE" > "$EVIDENCE/BASE_COMMIT"
           sha256sum "$EVIDENCE/formatted.patch" > "$EVIDENCE/formatted.patch.sha256"
-      - name: Record bounded official BE unit-test attempt
+      - name: Record bounded official BE unit-test attempt with JDK 17
         shell: bash
         run: |
           set +e
+          export JAVA_HOME="${JAVA_HOME_17_X64}"
+          export JDK_17="$JAVA_HOME"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version > "$EVIDENCE/java-version.txt" 2>&1
           timeout 150s bash run-be-ut.sh --run --filter='AsyncPublishRecoveryTest.*:StorageEngineTest.TestAsyncPublish:TxnManagerTest.PublishableInfo*' -j 2 > "$EVIDENCE/be-ut.log" 2>&1
           rc=$?
           printf '%s\n' "$rc" > "$EVIDENCE/be-ut-exit-code.txt"
@@ -100,52 +115,46 @@ jobs:
             echo '::warning::BE build/UT unavailable or failed; draft code only, not production validated.'
           fi
           cat "$EVIDENCE/TEST_STATUS.txt"
-          tail -n 40 "$EVIDENCE/be-ut.log"
-      - name: Commit and push only the repair branch
+          tail -n 60 "$EVIDENCE/be-ut.log"
+      - name: Commit and fast-forward only the repair branch
         shell: bash
         run: |
           set -euo pipefail
-          # Abort if another contributor moved the target. Never force-push.
           actual=$(git ls-remote origin "refs/heads/$TARGET" | cut -f1)
-          test "$actual" = "$BASE"
+          test "$actual" = "$PARENT"
           mapfile -t files < "$EVIDENCE/allowed.txt"
           git add -- "${files[@]}"
           git diff --cached --check
           git diff --cached --name-only | sort > "$EVIDENCE/staged.txt"
           sort "$EVIDENCE/allowed.txt" > "$EVIDENCE/allowed-sorted.txt"
           diff -u "$EVIDENCE/allowed-sorted.txt" "$EVIDENCE/staged.txt"
+          # Preserve the reconstructed tree while making this a normal fast-forward follow-up.
+          git reset --soft "$PARENT"
+          git diff --cached --check
           git config user.name 'Yijia Su'
           git config user.email 'freeoneplus@apache.org'
           cat > "$EVIDENCE/commit-message.txt" <<'EOF'
-          [fix](storage) Retain pending publish intents across local write delays
+          [fix](storage) Let failed local publish attempts coexist with replica repair
 
           ### What problem does this PR solve?
 
-          Related issue: #62057 (not a claim to reproduce or close its empty-success case).
-
-          Problem Summary: A prepared MoW replica may receive publish before its local
-          rowset is committed. Retain the requested version for asynchronous recovery.
-          Preserve pending markers through queued/running and failed attempts, serialize
-          attempts per tablet, check complete MoW readiness, and retry with a one-second
-          backoff. Acknowledge only after the target version exists. Propagate metadata
-          and thread-pool submission errors and preserve the bounded-backlog policy.
-
-          This change does not relax quorum or version checks, change FE repair policy,
-          or claim to fix Delete Bitmap computation cost or all query regressions.
+          Problem Summary: Clone uses the minimum pending publish version as its repair
+          ceiling. Retaining a failed request must not fence repair indefinitely.
+          Exclude completed failed attempts from that ceiling while keeping their local
+          retry intent and durable marker. Queued/running attempts still fence Clone.
+          Add targeted tests for failed and queued attempts and clarify idempotency coverage.
 
           ### Release note
 
-          Retain local pending publish requests through transient failures and unfinished
-          MoW writes, allowing an eligible replica to retry publishing its local rowset.
+          Keep necessary replica repair available when local async publish retries fail.
 
           ### Check List (For Author)
 
-          - Test: Added BE unit and three-replica fault-injection tests. clang-format 16,
-            git diff --check and build hygiene passed. Full BE compilation/UT and the
-            Docker regression still require the standard Doris build environment;
-            the isolated runner's bounded attempt and exit code are recorded separately.
-          - Behavior changed: Yes, local pending publish retries are retained and throttled.
-          - Does this need documentation: No public configuration or wire-format change.
+          - Test: clang-format 16, git diff --check and build hygiene passed. Added BE
+            unit tests; full BE compilation/UT, Docker regression and performance replay
+            remain unverified. The bounded official runner attempt is logged separately.
+          - Behavior changed: Yes, failed local attempts do not cap Clone's repair range.
+          - Does this need documentation: No new public configuration or wire format.
           EOF
           git commit -F "$EVIDENCE/commit-message.txt"
           git rev-parse HEAD > "$EVIDENCE/REPAIR_COMMIT"
@@ -154,7 +163,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: doris-publish-recovery-validation
+          name: doris-publish-recovery-validation-final
           path: /tmp/doris-publish-validation/
           retention-days: 7
           if-no-files-found: warn
