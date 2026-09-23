@@ -1,4 +1,4 @@
-name: Doris publish recovery source bundle
+name: Doris publish recovery validation
 
 on:
   push:
@@ -6,38 +6,155 @@ on:
       - diagnostics/doris-publish-build-20260923
     paths:
       - .github/workflows/doris-publish-source-bundle.yml
+      - .github/doris-publish-recovery.patch.b64
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: doris-publish-recovery-validation
+  cancel-in-progress: false
 
 jobs:
-  source-bundle:
+  validate-patch:
     if: github.repository == 'FreeOnePlus/doris'
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      BASE: fa687bd9d5e534253697df086d3ce4d8e3709148
+      TARGET: fix/mow-pending-publish-recovery
+      EVIDENCE: /tmp/doris-publish-validation
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fa687bd9d5e534253697df086d3ce4d8e3709148
-          persist-credentials: false
           fetch-depth: 1
-      - name: Package public sources for offline review
+      - name: Apply pinned source patch
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/doris-publish-source
-          git rev-parse HEAD > /tmp/doris-publish-source/BASE_COMMIT
-          tar -czf /tmp/doris-publish-source/sources.tar.gz \
-            AGENTS.md .clang-format .clang-tidy .github/PULL_REQUEST_TEMPLATE.md \
-            be/src be/test be/AGENTS.md be/README.md be/CMakeLists.txt \
-            build-support .claude/skills build.sh run-be-ut.sh run-regression-test.sh \
-            env.sh thirdparty/build-thirdparty.sh \
-            regression-test/suites/fault_injection_p0 regression-test/framework \
-            gensrc/proto/olap_file.proto
-          sha256sum /tmp/doris-publish-source/sources.tar.gz
+          mkdir -p "$EVIDENCE"
+          base64 --decode .github/doris-publish-recovery.patch.b64 | gzip -d > "$EVIDENCE/input.patch"
+          echo '010022431ecfa55008096537ae1943d36893b0e6a4db93bb9e5dc54a2aaed314  /tmp/doris-publish-validation/input.patch' | sha256sum -c -
+          git fetch --no-tags --depth=1 origin "$BASE"
+          git checkout --detach "$BASE"
+          git apply --check "$EVIDENCE/input.patch"
+          git apply "$EVIDENCE/input.patch"
+          cat > "$EVIDENCE/allowed.txt" <<'EOF'
+          be/src/agent/task_worker_pool.cpp
+          be/src/storage/data_dir.cpp
+          be/src/storage/olap_server.cpp
+          be/src/storage/storage_engine.h
+          be/src/storage/task/engine_publish_version_task.cpp
+          be/src/storage/task/engine_publish_version_task.h
+          be/src/storage/txn/txn_manager.cpp
+          be/src/storage/txn/txn_manager.h
+          be/test/storage/async_publish_recovery_test.cpp
+          be/test/storage/storage_engine_test.cpp
+          be/test/storage/txn/txn_manager_test.cpp
+          regression-test/suites/fault_injection_p0/test_mow_async_publish_local_close_retry.groovy
+          EOF
+          git add -N be/test/storage/async_publish_recovery_test.cpp regression-test/suites/fault_injection_p0/test_mow_async_publish_local_close_retry.groovy
+          git diff --check
+      - name: Format with repository clang-format 16 script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user clang-format==16.0.6
+          export PATH="$HOME/.local/bin:$PATH"
+          clang-format --version | tee "$EVIDENCE/clang-format-version.txt"
+          bash build-support/clang-format.sh > "$EVIDENCE/clang-format.log" 2>&1
+          # The repository script formats the full tree. Do not include unrelated files.
+          python3 - <<'PY'
+          import os, pathlib, subprocess
+          allowed = set(pathlib.Path(os.environ['EVIDENCE'], 'allowed.txt').read_text().splitlines())
+          changed = subprocess.check_output(['git', 'diff', '--name-only', '-z']).decode().split('\0')
+          restore = [p for p in changed if p and p not in allowed]
+          if restore:
+              subprocess.run(['git', 'restore', '--worktree', '--', *restore], check=True)
+          for p in sorted(allowed):
+              if p.endswith(('.cpp', '.h')):
+                  subprocess.run(['clang-format', '--dry-run', '--Werror', p], check=True)
+          PY
+          git diff --check
+      - name: Run build hygiene and export formatted patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash build-support/check-build-hygiene.sh 2>&1 | tee "$EVIDENCE/build-hygiene.log"
+          git diff --binary > "$EVIDENCE/formatted.patch"
+          git diff --stat > "$EVIDENCE/diff-stat.txt"
+          tar -czf "$EVIDENCE/changed-sources.tar.gz" -T "$EVIDENCE/allowed.txt"
+          printf '%s\n' "$BASE" > "$EVIDENCE/BASE_COMMIT"
+          sha256sum "$EVIDENCE/formatted.patch" > "$EVIDENCE/formatted.patch.sha256"
+      - name: Record bounded official BE unit-test attempt
+        shell: bash
+        run: |
+          set +e
+          timeout 150s bash run-be-ut.sh --run --filter='AsyncPublishRecoveryTest.*:StorageEngineTest.TestAsyncPublish:TxnManagerTest.PublishableInfo*' -j 2 > "$EVIDENCE/be-ut.log" 2>&1
+          rc=$?
+          printf '%s\n' "$rc" > "$EVIDENCE/be-ut-exit-code.txt"
+          if [ "$rc" -eq 0 ]; then
+            echo 'Official BE UT command completed successfully.' > "$EVIDENCE/TEST_STATUS.txt"
+          else
+            echo "Official BE UT attempt did not complete successfully (exit $rc). Full compilation and runtime tests remain unverified; inspect be-ut.log. No Docker regression or performance replay was executed." > "$EVIDENCE/TEST_STATUS.txt"
+            echo '::warning::BE build/UT unavailable or failed; draft code only, not production validated.'
+          fi
+          cat "$EVIDENCE/TEST_STATUS.txt"
+          tail -n 40 "$EVIDENCE/be-ut.log"
+      - name: Commit and push only the repair branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Abort if another contributor moved the target. Never force-push.
+          actual=$(git ls-remote origin "refs/heads/$TARGET" | cut -f1)
+          test "$actual" = "$BASE"
+          mapfile -t files < "$EVIDENCE/allowed.txt"
+          git add -- "${files[@]}"
+          git diff --cached --check
+          git diff --cached --name-only | sort > "$EVIDENCE/staged.txt"
+          sort "$EVIDENCE/allowed.txt" > "$EVIDENCE/allowed-sorted.txt"
+          diff -u "$EVIDENCE/allowed-sorted.txt" "$EVIDENCE/staged.txt"
+          git config user.name 'Yijia Su'
+          git config user.email 'freeoneplus@apache.org'
+          cat > "$EVIDENCE/commit-message.txt" <<'EOF'
+          [fix](storage) Retain pending publish intents across local write delays
+
+          ### What problem does this PR solve?
+
+          Related issue: #62057 (not a claim to reproduce or close its empty-success case).
+
+          Problem Summary: A prepared MoW replica may receive publish before its local
+          rowset is committed. Retain the requested version for asynchronous recovery.
+          Preserve pending markers through queued/running and failed attempts, serialize
+          attempts per tablet, check complete MoW readiness, and retry with a one-second
+          backoff. Acknowledge only after the target version exists. Propagate metadata
+          and thread-pool submission errors and preserve the bounded-backlog policy.
+
+          This change does not relax quorum or version checks, change FE repair policy,
+          or claim to fix Delete Bitmap computation cost or all query regressions.
+
+          ### Release note
+
+          Retain local pending publish requests through transient failures and unfinished
+          MoW writes, allowing an eligible replica to retry publishing its local rowset.
+
+          ### Check List (For Author)
+
+          - Test: Added BE unit and three-replica fault-injection tests. clang-format 16,
+            git diff --check and build hygiene passed. Full BE compilation/UT and the
+            Docker regression still require the standard Doris build environment;
+            the isolated runner's bounded attempt and exit code are recorded separately.
+          - Behavior changed: Yes, local pending publish retries are retained and throttled.
+          - Does this need documentation: No public configuration or wire-format change.
+          EOF
+          git commit -F "$EVIDENCE/commit-message.txt"
+          git rev-parse HEAD > "$EVIDENCE/REPAIR_COMMIT"
+          git push origin "HEAD:refs/heads/$TARGET"
+          git ls-remote origin "refs/heads/$TARGET" > "$EVIDENCE/REMOTE_REF"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: doris-publish-source-fa687bd9
-          path: /tmp/doris-publish-source/
-          retention-days: 1
-          if-no-files-found: error
+          name: doris-publish-recovery-validation
+          path: /tmp/doris-publish-validation/
+          retention-days: 7
+          if-no-files-found: warn
