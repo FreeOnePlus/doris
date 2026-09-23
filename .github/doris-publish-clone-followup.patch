@@ -1,0 +1,82 @@
+diff --git a/be/src/storage/olap_server.cpp b/be/src/storage/olap_server.cpp
+--- a/be/src/storage/olap_server.cpp
++++ b/be/src/storage/olap_server.cpp
+@@ -1737,7 +1737,16 @@
+     if (iter == _async_publish_tasks.end() || iter->second.empty()) {
+         return INT64_MAX;
+     }
+-    return iter->second.begin()->first;
++    for (const auto& [version, request] : iter->second) {
++        // Clone uses this value as its repair ceiling. Keep queued/running requests
++        // fenced, but a failed attempt must not prevent Clone from repairing a
++        // genuinely broken replica. The request and durable marker remain retryable.
++        if (request.attempt == nullptr || !request.attempt->finished() ||
++            request.attempt->result().ok()) {
++            return version;
++        }
++    }
++    return INT64_MAX;
+ }
+ 
+ void StorageEngine::_process_async_publish() {
+diff --git a/be/src/storage/storage_engine.h b/be/src/storage/storage_engine.h
+--- a/be/src/storage/storage_engine.h
++++ b/be/src/storage/storage_engine.h
+@@ -360,6 +360,8 @@
+ 
+     Status add_async_publish_task(int64_t partition_id, int64_t tablet_id, int64_t publish_version,
+                                 int64_t transaction_id, bool is_recover, int64_t commit_tso);
++    // The earliest pending version that still fences Clone. Failed attempts remain
++    // in the recovery queue but do not block replica repair.
+     int64_t get_pending_publish_min_version(int64_t tablet_id);
+ 
+     bool add_broken_path(std::string path);
+diff --git a/be/test/storage/async_publish_recovery_test.cpp b/be/test/storage/async_publish_recovery_test.cpp
+--- a/be/test/storage/async_publish_recovery_test.cpp
++++ b/be/test/storage/async_publish_recovery_test.cpp
+@@ -178,7 +178,7 @@
+     ASSERT_TRUE(attempt()->finished());
+     EXPECT_FALSE(attempt()->result().ok());
+     EXPECT_EQ(marker_count(), 1);
+-    EXPECT_EQ(_engine->get_pending_publish_min_version(TABLET_ID), 11);
++    EXPECT_EQ(_engine->get_pending_publish_min_version(TABLET_ID), INT64_MAX);
+     auto old_attempt = attempt();
+     _engine->_process_async_publish();
+     EXPECT_EQ(attempt(), old_attempt); // retry backoff, not a 30ms busy loop
+@@ -238,6 +238,7 @@
+         _engine->_process_async_publish();
+     }
+     EXPECT_EQ(attempt(), first);
++    EXPECT_EQ(_engine->get_pending_publish_min_version(TABLET_ID), 11);
+     EXPECT_EQ(_engine->_async_publish_tasks.at(TABLET_ID).size(), 1);
+     EXPECT_EQ(marker_count(), 1);
+ }
+@@ -250,7 +251,7 @@
+     ASSERT_TRUE(attempt()->finished());
+     EXPECT_FALSE(attempt()->result().ok());
+     EXPECT_EQ(marker_count(), 1);
+-    EXPECT_EQ(_engine->get_pending_publish_min_version(TABLET_ID), 11);
++    EXPECT_EQ(_engine->get_pending_publish_min_version(TABLET_ID), INT64_MAX);
+ }
+ 
+ TEST_F(AsyncPublishRecoveryTest, OutOfOrderVersionWaitsForPredecessor) {
+@@ -352,4 +353,19 @@
+     EXPECT_EQ(marker_count(), 1); // failure never claims a successful publish
+ }
+ 
++
++TEST_F(AsyncPublishRecoveryTest, FailedAttemptDoesNotBlockReplicaRepair) {
++    ASSERT_TRUE(enqueue().ok());
++    ASSERT_TRUE(enqueue(12, TXN_ID + 1).ok());
++    EXPECT_EQ(_engine->get_pending_publish_min_version(TABLET_ID), 11);
++    run_attempt();
++    ASSERT_TRUE(attempt()->finished());
++    ASSERT_FALSE(attempt()->result().ok());
++    // Version 11 has no local rowset. Clone may repair it up to the next pending
++    // version's predecessor, without discarding the local recovery intention.
++    EXPECT_EQ(_engine->get_pending_publish_min_version(TABLET_ID), 12);
++    EXPECT_EQ(marker_count(), 2);
++    EXPECT_EQ(_engine->_async_publish_tasks.at(TABLET_ID).size(), 2);
++}
++
+ } // namespace doris
